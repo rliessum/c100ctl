@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=C100 Control
+Comment=Bind Keychron C100 8K keys to apps, macros and shortcuts
+Exec=c100ctl
+Icon=c100ctl
+Terminal=false
+Categories=Utility;HardwareSettings;
+Keywords=keychron;macropad;c100;qmk;via;
+StartupNotify=true
+DBusActivatable=false

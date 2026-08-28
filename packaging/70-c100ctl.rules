@@ -1,0 +1,9 @@
+# Keychron C100 8K (and other Keychron boards) — user access to VIA/raw HID.
+# Filename must sort before 73-seat-late.rules so TAG+=uaccess is applied.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3434", MODE="0660", TAG+="uaccess"
+
+# Virtual keyboard used to inject combos / typed text.
+KERNEL=="uinput", MODE="0660", TAG+="uaccess"
+
+# Artery AT32 DFU (C100 8K MCU) — firmware flash via WebUSB / QMK Toolbox.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="df11", MODE="0660", TAG+="uaccess"
