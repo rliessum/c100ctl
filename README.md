@@ -73,7 +73,7 @@ c100ctl bind 2 3 --clear
 
 c100ctl light --brightness 200 --effect 1
 c100ctl light --key 2,3 --color '#ff8800'
-c100ctl light --key 0,1 --key 0,2 --key 0,3 --color '#34c759'
+c100ctl light --key 0,1 --key 0,2 --key 0,3 --color '#00ff00'
 c100ctl light --key 2,3 --color off
 c100ctl profile --create gaming
 c100ctl profile --use gaming

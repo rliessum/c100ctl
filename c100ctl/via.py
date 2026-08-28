@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import colorsys
 import threading
 from typing import Sequence
 
@@ -51,6 +52,7 @@ KC_RGB_SET_EFFECT = 8
 KC_RGB_GET_COLOR = 9
 KC_RGB_SET_COLOR = 10
 PER_KEY_EFFECT = 23
+PER_KEY_RGB_SOLID = 0
 LEDS_PER_PACKET = 9
 
 BUFFER_CHUNK = 28
@@ -228,7 +230,8 @@ class ViaClient:
 
     def enable_per_key(self, save: bool = True) -> None:
         self.set_effect(PER_KEY_EFFECT, save=save)
-        self._cmd([KC_RGB, KC_RGB_SET_EFFECT, PER_KEY_EFFECT])
+        # Subcommand 8 is per-key *type* (solid/breathing/…), not the VIA effect id.
+        self._cmd([KC_RGB, KC_RGB_SET_EFFECT, PER_KEY_RGB_SOLID])
 
     def save_leds(self) -> None:
         self._cmd([KC_RGB, KC_RGB_SAVE])
@@ -267,15 +270,31 @@ class ViaClient:
 
 
 def rgb_to_hsv255(r: int, g: int, b: int) -> tuple[int, int, int]:
-    import colorsys
-
     h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-    return int(round(h * 255)), int(round(s * 255)), int(round(v * 255))
+    h8 = int(round(h * 255)) % 256
+    s8 = int(round(s * 255))
+    v8 = int(round(v * 255))
+    h8, s8 = _led_green(h8, s8)
+    return h8, s8, v8
+
+
+def _led_green(h: int, s: int) -> tuple[int, int]:
+    """Map mint/spring sRGB greens onto a hue the C100 LEDs read as green.
+
+    Firmware stores HSV and renders with hsv_to_rgb(), then replaces V with
+    global brightness.  iOS-style greens (~hue 96, sat ~74%) therefore show
+    as washed teal.  Pull that band onto QMK green and max saturation.
+    Yellow, teal, and other hues are left alone.
+    """
+    if s < 64 or not 86 <= h <= 115:
+        return h, s
+    h = 78 + int(round((h - 86) * 7 / 29))
+    if s >= 80:
+        s = 255
+    return h, s
 
 
 def hsv255_to_rgb(h: int, s: int, v: int) -> tuple[int, int, int]:
-    import colorsys
-
     r, g, b = colorsys.hsv_to_rgb(h / 255.0, s / 255.0, v / 255.0)
     return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
 
