@@ -2,6 +2,8 @@ import unittest
 
 from c100ctl.via import (
     _led_green,
+    heatmap_hex,
+    heatmap_rgb,
     hsv255_to_rgb,
     parse_hex_color,
     poll_div_from_hz,
@@ -55,6 +57,23 @@ class ColorTest(unittest.TestCase):
     def test_led_green_ignores_low_sat(self):
         self.assertEqual(_led_green(96, 10), (96, 10))
         self.assertEqual(_led_green(20, 255), (20, 255))
+
+    def test_heatmap_off_is_black(self):
+        self.assertEqual(heatmap_rgb(0), (0, 0, 0))
+        self.assertIsNone(heatmap_hex(0))
+
+    def test_heatmap_hotter_with_more_hits(self):
+        cold = heatmap_rgb(1)
+        mid = heatmap_rgb(4)
+        hot = heatmap_rgb(12)
+        self.assertNotEqual(cold, (0, 0, 0))
+        self.assertNotEqual(cold, mid)
+        self.assertNotEqual(mid, hot)
+        self.assertEqual(heatmap_rgb(99), heatmap_rgb(12))
+        self.assertTrue(heatmap_hex(1).startswith("#"))
+        # hue ramp: first hits are blue-ish, later hits red-ish
+        self.assertGreater(cold[2], cold[0])
+        self.assertGreater(hot[0], hot[2])
 
     def test_poll_div(self):
         self.assertEqual(poll_hz_from_div(0), 8000)

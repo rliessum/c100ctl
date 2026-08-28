@@ -25,6 +25,8 @@ from .via import (
     PER_KEY_EFFECT,
     ViaClient,
     ViaError,
+    heatmap_hex,
+    heatmap_rgb,
     parse_hex_color,
     poll_div_from_hz,
     poll_hz_from_div,
@@ -102,6 +104,8 @@ class Engine:
         self._pre_dim_brightness = 255
         self.hardware: dict[str, Any] = {}
         self._macro_hold: dict[tuple[int, int], threading.Event] = {}
+        self._heatmap = False
+        self._heatmap_hits: dict[tuple[int, int], int] = {}
 
     def start_ipc(self) -> None:
         self.ipc = IpcServer(self.handle)
@@ -109,6 +113,13 @@ class Engine:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._heatmap:
+            self._heatmap = False
+            try:
+                if self.via and self.connected:
+                    self._apply_lighting()
+            except Exception:
+                log.exception("restore lighting on stop")
         with self._tap_lock:
             for timer in self._pending_tap.values():
                 timer.cancel()
@@ -178,7 +189,10 @@ class Engine:
             log.exception("LED map failed")
             self._led_map = None
         try:
-            self._apply_lighting()
+            if self._heatmap:
+                self._paint_heatmap()
+            else:
+                self._apply_lighting()
         except Exception:
             log.exception("lighting apply failed")
         try:
@@ -233,6 +247,19 @@ class Engine:
         cell = (row, col)
         if pressed:
             self._down.add(cell)
+            if self._heatmap:
+                self._heatmap_hits[cell] = self._heatmap_hits.get(cell, 0) + 1
+                count = self._heatmap_hits[cell]
+                self._paint_heatmap_cell(cell)
+                self._broadcast(
+                    {
+                        "event": "heatmap",
+                        "row": row,
+                        "col": col,
+                        "count": count,
+                        "color": heatmap_hex(count),
+                    }
+                )
         else:
             self._down.discard(cell)
         if (row, col) in LOCKED_KEYS:
@@ -538,6 +565,8 @@ class Engine:
         if self._idle_timer:
             self._idle_timer.cancel()
             self._idle_timer = None
+        if self._heatmap:
+            return
         seconds = int((self.store.data.get("advanced") or {}).get("idle_dim_s") or 0)
         if seconds <= 0:
             return
@@ -586,14 +615,12 @@ class Engine:
         return out
 
     def _apply_lighting(self) -> None:
-        if not self.via:
+        if not self.via or self._heatmap:
             return
         lighting = self.store.data.setdefault("lighting", {})
         colors = lighting.get("keys") or {}
         effect = int(lighting.get("effect", 1))
-        if colors and effect not in (PER_KEY_EFFECT, MIX_RGB_EFFECT):
-            effect = PER_KEY_EFFECT
-            lighting["effect"] = effect
+        effect = max(0, min(len(RGB_EFFECTS) - 1, effect))
         if "brightness" in lighting:
             self.via.set_brightness(int(lighting["brightness"]), save=True)
         if "speed" in lighting:
@@ -679,6 +706,58 @@ class Engine:
         self._led_save_timer.daemon = True
         self._led_save_timer.start()
 
+    def _heatmap_hits_payload(self) -> dict[str, int]:
+        return {key_id(r, c): n for (r, c), n in self._heatmap_hits.items() if n}
+
+    def _paint_heatmap(self) -> None:
+        if not self.via or not self.connected:
+            return
+        try:
+            self.via.set_brightness(255, save=False)
+            self.via.enable_per_key(save=False)
+            colors = [
+                heatmap_rgb(self._heatmap_hits.get((r, c), 0))
+                for r in range(ROWS)
+                for c in range(COLS)
+            ]
+            self.via.write_all_rgb(colors, save=False)
+        except ViaError:
+            log.warning("heatmap paint failed", exc_info=True)
+
+    def _paint_heatmap_cell(self, cell: tuple[int, int]) -> None:
+        if not self.via or not self.connected:
+            return
+        color = heatmap_hex(self._heatmap_hits.get(cell, 0))
+        try:
+            self.via.enable_per_key(save=False)
+            self._write_key_color(cell[0], cell[1], color, save=False)
+        except ViaError:
+            log.warning("heatmap cell failed", exc_info=True)
+
+    def set_heatmap(self, active: bool | None = None, reset: bool = False) -> dict[str, Any]:
+        if reset:
+            self._heatmap_hits.clear()
+        if active is True:
+            was = self._heatmap
+            self._heatmap = True
+            if self._idle_timer:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+            if not was or reset:
+                self._paint_heatmap()
+        elif active is False:
+            if self._heatmap:
+                self._heatmap = False
+                if self.via and self.connected:
+                    try:
+                        self._apply_lighting()
+                    except Exception:
+                        log.exception("restore lighting after heatmap")
+                self._arm_idle()
+        elif reset and self._heatmap:
+            self._paint_heatmap()
+        return {"ok": True, "active": self._heatmap, "hits": self._heatmap_hits_payload()}
+
     def set_key_color(self, row: int, col: int, color: str | None) -> dict[str, Any]:
         return self.set_key_colors([(row, col, color)])
 
@@ -698,7 +777,7 @@ class Engine:
         if any(color for _r, _c, color in normalized):
             lighting["effect"] = PER_KEY_EFFECT
             self.store.save()
-        if self.via and self.connected:
+        if self.via and self.connected and not self._heatmap:
             if any(color for _r, _c, color in normalized):
                 self.via.enable_per_key(save=False)
             for row, col, color in normalized:
@@ -731,13 +810,6 @@ class Engine:
 
     def status(self) -> dict[str, Any]:
         lighting = dict(self.store.data.get("lighting") or {})
-        if self.via and self.connected:
-            try:
-                lighting["brightness"] = self.via.brightness()
-                lighting["effect"] = self.via.effect()
-                lighting["speed"] = self.via.speed()
-            except ViaError:
-                pass
         return {
             "ok": True,
             "version": __version__,
@@ -755,6 +827,7 @@ class Engine:
             "effects": RGB_EFFECTS,
             "hardware": dict(self.hardware),
             "info": self.info,
+            "heatmap": self._heatmap,
         }
 
     def handle(self, req: dict[str, Any]) -> dict[str, Any]:
@@ -786,7 +859,7 @@ class Engine:
             if "brightness" in req:
                 lighting["brightness"] = int(req["brightness"])
             if "effect" in req:
-                lighting["effect"] = int(req["effect"])
+                lighting["effect"] = max(0, min(len(RGB_EFFECTS) - 1, int(req["effect"])))
             if "speed" in req:
                 lighting["speed"] = int(req["speed"])
             if "color" in req and req["color"]:
@@ -810,7 +883,7 @@ class Engine:
                 mix["slots"] = req["slots"]
             lighting["effect"] = MIX_RGB_EFFECT
             self.store.save()
-            if self.via and self.connected:
+            if self.via and self.connected and not self._heatmap:
                 self.via.set_effect(MIX_RGB_EFFECT, save=True)
                 self._apply_mix(mix)
             self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
@@ -819,7 +892,7 @@ class Engine:
             lighting = self.store.data.setdefault("lighting", {})
             lighting["keys"] = {}
             self.store.save()
-            if self.via and self.connected:
+            if self.via and self.connected and not self._heatmap:
                 black = [(0, 0, 0)] * 100
                 self.via.write_all_rgb(black, save=True)
             self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
@@ -874,6 +947,11 @@ class Engine:
                     color = None
                 updates.append((int(item["row"]), int(item["col"]), color))
             return self.set_key_colors(updates)
+        if op == "heatmap":
+            active = req.get("active")
+            if active is not None:
+                active = bool(active)
+            return self.set_heatmap(active=active, reset=bool(req.get("reset")))
         if op == "provision":
             self.provision(backup=req.get("backup", True))
             return {"ok": True}

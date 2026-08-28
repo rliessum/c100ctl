@@ -14,7 +14,7 @@ Linux host for the **Keychron C100 8K** 10×10 macropad. Built for [Omarchy](htt
 - **Chords**: two or more keys together fire one action
 - Per-key RGB, per-key effects, 24 matrix effects, **Mix RGB** (two zones, five timeline slots)
 - Polling rate (125–8000 Hz), debounce, NKRO, idle-dim
-- Macro recorder, lighting undo/redo, config import/export, key test heatmap
+- Macro recorder, lighting undo/redo, config import/export, key-test heatmap (hotter with more hits, on the pad and in the window)
 
 Firmware keymap remapping, firmware flash, and Hall-effect features stay in Keychron Launcher. This app does not overwrite the identity keymap the daemon uses to tell keys apart.
 
@@ -82,7 +82,7 @@ Four pages at the bottom of the window:
 | **Keys** | 10×10 pad, bindings, per-key color, effect / brightness / speed |
 | **Mix RGB** | Two lighting zones and a timeline of effects per zone |
 | **Advanced** | Polling rate, debounce, NKRO, idle dim |
-| **Test** | Heatmap of physical key hits (bindings still fire) |
+| **Test** | Heatmap of physical key hits — more presses glow hotter on the pad and here. Leave the page to restore lighting. Bindings still fire. |
 
 Press a key on the pad to select it. Corner keys stay on firmware lighting.
 

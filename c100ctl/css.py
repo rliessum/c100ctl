@@ -67,11 +67,6 @@ window.main {
 .zone-0 { outline: 2px solid #7aa2f7; outline-offset: 1px; }
 .zone-1 { outline: 2px solid #e0af68; outline-offset: 1px; }
 
-.test-hit {
-  background: #f0a05a !important;
-  color: #1b140e !important;
-}
-
 .key-label {
   font-size: 12px;
   font-weight: 700;

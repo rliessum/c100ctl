@@ -36,7 +36,17 @@ from .config import BINDING_TYPES, key_id, parse_key_id
 from .css import APP_CSS
 from .daemon import RGB_EFFECTS
 from .ipc import IpcClient, daemon_available
-from .via import MIX_RGB_EFFECT, PER_KEY_EFFECT, parse_hex_color, rgb_to_hex
+from .via import MIX_RGB_EFFECT, PER_KEY_EFFECT, heatmap_hex, parse_hex_color, rgb_to_hex
+
+# Firmware ids stay 0–24. Show Per Key RGB / Mix RGB first so they stay
+# pickable instead of sitting under 23 animation names.
+EFFECT_PICKER: tuple[tuple[int, str], ...] = (
+    (PER_KEY_EFFECT, "Per Key RGB"),
+    (MIX_RGB_EFFECT, "Mix RGB"),
+    *tuple((i, name) for i, name in enumerate(RGB_EFFECTS[:23])),
+)
+EFFECT_LABELS = tuple(name for _eid, name in EFFECT_PICKER)
+EFFECT_IDS = tuple(eid for eid, _name in EFFECT_PICKER)
 
 PALETTE = (
     "#ff3b30",
@@ -226,6 +236,7 @@ class C100Window(Adw.ApplicationWindow):
         self._record_last = 0.0
         self._record_parts: list[str] = []
         self.test_hits: dict[tuple[int, int], int] = {}
+        self._heatmap_ui = False
         self._apps = list_desktop_apps()
         self._building = False
         self._drag_moved = False
@@ -284,6 +295,7 @@ class C100Window(Adw.ApplicationWindow):
         self.stack.add_titled_with_icon(self._build_mix_page(), "mix", "Mix RGB", "color-select-symbolic")
         self.stack.add_titled_with_icon(self._build_advanced_page(), "advanced", "Advanced", "emblem-system-symbolic")
         self.stack.add_titled_with_icon(self._build_test_page(), "test", "Test", "view-grid-symbolic")
+        self.stack.connect("notify::visible-child", self._on_page)
 
         shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         shell.append(self.stack)
@@ -314,6 +326,7 @@ class C100Window(Adw.ApplicationWindow):
         hint.add_css_class("hint")
         # already in pad
 
+        self.connect("close-request", self._on_close)
         try:
             ensure_daemon()
             self.client = IpcClient()
@@ -368,7 +381,8 @@ class C100Window(Adw.ApplicationWindow):
         self.bright.connect("value-changed", self._on_bright)
         light_row.append(self.bright)
         light_row.append(Gtk.Label(label="Effect"))
-        self.effect = Gtk.DropDown.new_from_strings(RGB_EFFECTS)
+        self.effect = Gtk.DropDown.new_from_strings(list(EFFECT_LABELS))
+        self.effect.set_size_request(160, -1)
         self.effect.connect("notify::selected", self._on_effect)
         light_row.append(self.effect)
         light_row.append(Gtk.Label(label="Speed"))
@@ -654,22 +668,27 @@ class C100Window(Adw.ApplicationWindow):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         outer.set_margin_top(16)
         hint = Gtk.Label(
-            label="Press keys on the C100. Hits light up here. Bindings still fire.",
+            label="Press keys on the C100. More hits glow hotter here and on the pad. Leave this page (or Done) to restore lighting. Bindings still fire.",
             wrap=True,
         )
         hint.add_css_class("hint")
         outer.append(hint)
+        row = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         reset = Gtk.Button(label="Reset heatmap")
-        reset.connect("clicked", lambda *_: self._reset_test())
-        outer.append(reset)
+        reset.connect("clicked", self._reset_test)
+        done = Gtk.Button(label="Done — restore lighting")
+        done.add_css_class("suggested-action")
+        done.connect("clicked", lambda *_: self.stack.set_visible_child_name("keys"))
+        row.append(reset)
+        row.append(done)
+        outer.append(row)
         grid = Gtk.Grid(column_spacing=4, row_spacing=4, halign=Gtk.Align.CENTER)
-        self.test_keys: dict[tuple[int, int], Gtk.Button] = {}
+        self.test_keys: dict[tuple[int, int], KeyCap] = {}
         for r in range(ROWS):
             for c in range(COLS):
-                btn = Gtk.Button(label=f"{r},{c}")
-                btn.add_css_class("keycap")
-                grid.attach(btn, c, r, 1, 1)
-                self.test_keys[(r, c)] = btn
+                cap = KeyCap(r, c)
+                grid.attach(cap, c, r, 1, 1)
+                self.test_keys[(r, c)] = cap
         outer.append(grid)
         return outer
 
@@ -988,9 +1007,9 @@ class C100Window(Adw.ApplicationWindow):
                 self.config["lighting"]["keys"] = lighting["keys"]
             for cell in cells:
                 self.keys[cell].apply_led_color(hex_color)
-            if int(self.effect.get_selected() or 0) != PER_KEY_EFFECT:
+            if self._selected_effect_id() != PER_KEY_EFFECT:
                 self._building = True
-                self.effect.set_selected(PER_KEY_EFFECT)
+                self._set_effect_id(PER_KEY_EFFECT)
                 self._building = False
 
     def _active_keys(self) -> dict[str, Any]:
@@ -1120,10 +1139,22 @@ class C100Window(Adw.ApplicationWindow):
             return
         self._rpc("set_lighting", brightness=int(scale.get_value()))
 
+    def _selected_effect_id(self) -> int:
+        idx = int(self.effect.get_selected() or 0)
+        if 0 <= idx < len(EFFECT_IDS):
+            return EFFECT_IDS[idx]
+        return 1
+
+    def _set_effect_id(self, effect_id: int) -> None:
+        try:
+            self.effect.set_selected(EFFECT_IDS.index(int(effect_id)))
+        except ValueError:
+            pass
+
     def _on_effect(self, *_a: object) -> None:
         if self._building:
             return
-        self._rpc("set_lighting", effect=int(self.effect.get_selected()))
+        self._rpc("set_lighting", effect=self._selected_effect_id())
 
     def _on_speed(self, scale: Gtk.Scale) -> None:
         if self._building:
@@ -1140,6 +1171,9 @@ class C100Window(Adw.ApplicationWindow):
     def _on_per_key_type(self, *_a: object) -> None:
         if self._building:
             return
+        self._building = True
+        self._set_effect_id(PER_KEY_EFFECT)
+        self._building = False
         self._rpc("set_lighting", per_key_type=int(self.per_key_type.get_selected() or 0), effect=PER_KEY_EFFECT)
 
     def _snapshot_colors(self) -> dict[str, str]:
@@ -1249,11 +1283,51 @@ class C100Window(Adw.ApplicationWindow):
         )
         self._toast("Advanced settings written")
 
-    def _reset_test(self) -> None:
+    def _on_page(self, *_a: object) -> None:
+        want = self.stack.get_visible_child_name() == "test"
+        if want == self._heatmap_ui:
+            return
+        self._heatmap_ui = want
+        if want:
+            resp = self._rpc("heatmap", active=True)
+            self._apply_heatmap_hits((resp or {}).get("hits") or {})
+        else:
+            self._rpc("heatmap", active=False)
+
+    def _on_close(self, *_a: object) -> bool:
+        if self._heatmap_ui:
+            self._heatmap_ui = False
+            self._rpc("heatmap", active=False)
+        return False
+
+    def _apply_heatmap_hits(self, hits: dict[str, Any]) -> None:
+        parsed: dict[tuple[int, int], int] = {}
+        for kid, n in hits.items():
+            try:
+                parsed[parse_key_id(str(kid))] = int(n)
+            except (ValueError, TypeError):
+                continue
+        self.test_hits = parsed
+        for cell, cap in self.test_keys.items():
+            self._paint_test_cell(cell, parsed.get(cell, 0), cap)
+
+    def _paint_test_cell(self, cell: tuple[int, int], hits: int, cap: KeyCap | None = None) -> None:
+        cap = cap or self.test_keys.get(cell)
+        if not cap:
+            return
+        cap.apply_led_color(heatmap_hex(hits))
+        if cap.locked:
+            return
+        cap.sub.set_text(str(hits) if hits else "")
+
+    def _reset_test(self, *_a: object) -> None:
+        resp = self._rpc("heatmap", reset=True)
+        if resp and resp.get("ok"):
+            self._apply_heatmap_hits(resp.get("hits") or {})
+            return
         self.test_hits.clear()
-        for btn in self.test_keys.values():
-            btn.remove_css_class("test-hit")
-            btn.set_label(btn.get_label().split()[0] if btn.get_label() else "")
+        for cell, cap in self.test_keys.items():
+            self._paint_test_cell(cell, 0, cap)
 
     def _toggle_record(self, *_a: object) -> None:
         self._record_macro = not self._record_macro
@@ -1456,7 +1530,7 @@ class C100Window(Adw.ApplicationWindow):
         if "brightness" in lighting:
             self.bright.set_value(int(lighting["brightness"]))
         if "effect" in lighting:
-            self.effect.set_selected(int(lighting["effect"]))
+            self._set_effect_id(int(lighting["effect"]))
         if "speed" in lighting:
             self.speed.set_value(int(lighting["speed"]))
         if lighting.get("color"):
@@ -1529,6 +1603,9 @@ class C100Window(Adw.ApplicationWindow):
         try:
             self.status = self.client.request("status")
             self._apply_status()
+            if self._heatmap_ui and not self.status.get("heatmap"):
+                resp = self.client.request("heatmap", active=True)
+                self._apply_heatmap_hits((resp or {}).get("hits") or {})
         except OSError:
             self.client = None
             self.status = {"connected": False}
@@ -1546,11 +1623,11 @@ class C100Window(Adw.ApplicationWindow):
                 visible = self.stack.get_visible_child_name() if hasattr(self, "stack") else "keys"
                 if visible != "test":
                     self._select_click(cell, add=False, rect=False)
-                self.test_hits[cell] = self.test_hits.get(cell, 0) + 1
-                tbtn = self.test_keys.get(cell)
-                if tbtn:
-                    tbtn.add_css_class("test-hit")
-                    tbtn.set_label(f"{cell[0]},{cell[1]}  {self.test_hits[cell]}")
+        elif ev == "heatmap":
+            cell = (int(msg["row"]), int(msg["col"]))
+            n = int(msg.get("count") or 0)
+            self.test_hits[cell] = n
+            self._paint_test_cell(cell, n)
         elif ev in {"connected", "disconnected", "config", "profile", "lighting"}:
             if "config" in msg:
                 self.config = msg["config"]

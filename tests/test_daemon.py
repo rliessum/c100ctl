@@ -262,8 +262,52 @@ class DaemonIpcTest(unittest.TestCase):
         self.assertTrue(any(c[0] == "enable_per_key" for c in self.eng.via.calls))
         self.assertTrue(self.eng.via.hsv_writes)
 
+    def test_matrix_effect_ignores_saved_key_colors(self):
+        self.store.set_key_color(1, 1, "#ff0000")
+        r = self.eng.handle({"op": "set_lighting", "effect": 2})
+        self.assertEqual(r["lighting"]["effect"], 2)
+        self.assertEqual(self.store.data["lighting"]["effect"], 2)
+        self.assertEqual(self.store.get_key_color(1, 1), "#ff0000")
+        effects = [c for c in self.eng.via.calls if c[0] == "set_effect"]
+        self.assertEqual(effects[-1][1], 2)
+        self.assertFalse(any(c[0] == "enable_per_key" for c in self.eng.via.calls))
+        st = self.eng.status()
+        self.assertEqual(st["lighting"]["effect"], 2)
+
     def test_set_key_color_single(self):
         r = self.eng.handle({"op": "set_key_color", "row": 2, "col": 2, "color": "#00ff00"})
         self.assertTrue(r["ok"])
         r = self.eng.handle({"op": "set_key_color", "row": 2, "col": 2, "color": ""})
         self.assertTrue(r["ok"])
+
+    def test_heatmap_paints_and_restores(self):
+        self.store.set_key_color(1, 1, "#ff0000")
+        self.store.data["lighting"]["effect"] = 23
+        self.eng._apply_lighting()
+        self.eng.via.calls.clear()
+        self.eng.via.hsv_writes.clear()
+        r = self.eng.handle({"op": "heatmap", "active": True})
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["active"])
+        self.assertTrue(self.eng.status()["heatmap"])
+        self.assertTrue(any(c[0] == "write_all_rgb" and c[2] is False for c in self.eng.via.calls))
+        self.assertEqual(self.store.get_key_color(1, 1), "#ff0000")
+        self.eng._on_key(3, 3, True)
+        self.eng._on_key(3, 3, False)
+        once = [w for w in self.eng.via.hsv_writes if w[0] == 33]
+        self.assertTrue(once)
+        self.eng._on_key(3, 3, True)
+        twice = [w for w in self.eng.via.hsv_writes if w[0] == 33]
+        self.assertGreater(len(twice), len(once))
+        self.assertNotEqual(twice[-1][1], once[-1][1])
+        r = self.eng.handle({"op": "heatmap", "active": True})
+        self.assertEqual(r["hits"]["3,3"], 2)
+        self.assertTrue(any(c[0] == "enable_per_key" for c in self.eng.via.calls))
+        r = self.eng.handle({"op": "heatmap", "reset": True})
+        self.assertEqual(r["hits"], {})
+        self.assertTrue(r["active"])
+        r = self.eng.handle({"op": "heatmap", "active": False})
+        self.assertFalse(r["active"])
+        self.assertEqual(self.store.get_key_color(1, 1), "#ff0000")
+        self.assertTrue(any(c[0] == "enable_per_key" for c in self.eng.via.calls))
+        self.assertFalse(self.eng.status()["heatmap"])

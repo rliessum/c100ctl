@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import colorsys
+import math
 import threading
 from typing import Sequence
 
@@ -457,3 +458,41 @@ def parse_hex_color(value: str) -> tuple[int, int, int]:
 
 def rgb_to_hex(r: int, g: int, b: int) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# Cold → hot, all high saturation so C100 LEDs still read a ramp when they
+# ignore per-key V and substitute global brightness.
+HEAT_CAP = 12
+_HEAT_STOPS = (
+    (0.00, (24, 56, 200)),
+    (0.22, (0, 180, 255)),
+    (0.42, (40, 230, 90)),
+    (0.62, (255, 210, 0)),
+    (0.82, (255, 72, 0)),
+    (1.00, (255, 32, 32)),
+)
+
+
+def heatmap_rgb(hits: int, cap: int = HEAT_CAP) -> tuple[int, int, int]:
+    """RGB for a key-hit heatmap. 0 is off; more hits run blue → red."""
+    if hits <= 0:
+        return (0, 0, 0)
+    t = min(1.0, math.log1p(hits) / math.log1p(max(1, cap)))
+    prev_t, prev_c = _HEAT_STOPS[0]
+    for nxt_t, nxt_c in _HEAT_STOPS[1:]:
+        if t <= nxt_t:
+            span = nxt_t - prev_t
+            u = (t - prev_t) / span if span else 1.0
+            return (
+                int(round(prev_c[0] + (nxt_c[0] - prev_c[0]) * u)),
+                int(round(prev_c[1] + (nxt_c[1] - prev_c[1]) * u)),
+                int(round(prev_c[2] + (nxt_c[2] - prev_c[2]) * u)),
+            )
+        prev_t, prev_c = nxt_t, nxt_c
+    return _HEAT_STOPS[-1][1]
+
+
+def heatmap_hex(hits: int, cap: int = HEAT_CAP) -> str | None:
+    if hits <= 0:
+        return None
+    return rgb_to_hex(*heatmap_rgb(hits, cap))
