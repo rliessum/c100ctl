@@ -110,13 +110,19 @@ def parse_key_id(value: str) -> tuple[int, int]:
 
 def _atomic_write(path: Path, data: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
     fd, tmp = tempfile.mkstemp(prefix=".c100ctl.", dir=str(path.parent))
     try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        os.chmod(path, 0o600)
     except Exception:
         try:
             os.unlink(tmp)

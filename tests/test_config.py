@@ -1,10 +1,13 @@
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 
 from c100ctl.config import (
     Store,
+    _atomic_write,
     default_advanced,
     default_config,
     default_lighting,
@@ -155,3 +158,36 @@ class ConfigTest(unittest.TestCase):
     def test_xdg_helpers(self):
         self.assertTrue(str(xdg_config()).endswith("c100ctl"))
         self.assertIn("c100ctl", str(xdg_runtime()))
+
+
+class SecurityTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_config_file_permissions(self):
+        subdir = Path(self.tmp.name) / "nested" / "deep"
+        path = subdir / "config.json"
+        store = Store(path)
+        store.save()
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        self.assertEqual(mode, 0o600, f"config file should be 0600, got {oct(mode)}")
+
+    def test_config_directory_permissions(self):
+        subdir = Path(self.tmp.name) / "nested" / "deep"
+        path = subdir / "config.json"
+        store = Store(path)
+        store.save()
+        mode = stat.S_IMODE(os.stat(subdir).st_mode)
+        self.assertEqual(mode, 0o700, f"config dir should be 0700, got {oct(mode)}")
+
+    def test_atomic_write_permissions(self):
+        subdir = Path(self.tmp.name) / "atomicdir"
+        path = subdir / "test.json"
+        _atomic_write(path, '{"test": true}')
+        file_mode = stat.S_IMODE(os.stat(path).st_mode)
+        dir_mode = stat.S_IMODE(os.stat(subdir).st_mode)
+        self.assertEqual(file_mode, 0o600, f"file should be 0600, got {oct(file_mode)}")
+        self.assertEqual(dir_mode, 0o700, f"dir should be 0700, got {oct(dir_mode)}")
