@@ -13,8 +13,9 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Graphene", "1.0")
 
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk  # noqa: E402
 
 from . import COLS, LOCKED_KEYS, LOCKED_LABELS, ROWS, __version__
 from .actions import list_desktop_apps
@@ -173,9 +174,15 @@ class C100Window(Adw.ApplicationWindow):
         self.config: dict[str, Any] = {}
         self.status: dict[str, Any] = {}
         self.selected: tuple[int, int] | None = None
+        self.selected_cells: set[tuple[int, int]] = set()
+        self.anchor: tuple[int, int] | None = None
         self.keys: dict[tuple[int, int], KeyCap] = {}
         self._apps = list_desktop_apps()
         self._building = False
+        self._drag_moved = False
+        self._drag_start = (0.0, 0.0)
+        self._drag_ctrl = False
+        self.pad_grid: Gtk.Grid | None = None
 
         provider = Gtk.CssProvider()
         provider.load_from_data(APP_CSS.encode())
@@ -226,6 +233,10 @@ class C100Window(Adw.ApplicationWindow):
         self.install_action("win.new-profile", None, self._action_new_profile)
         self.install_action("win.about", None, self._action_about)
 
+        keys_ctrl = Gtk.EventControllerKey()
+        keys_ctrl.connect("key-pressed", self._on_win_key)
+        self.add_controller(keys_ctrl)
+
         hint = Gtk.Label(
             label="Press a key on the C100 to select it. Corner keys stay on the firmware lighting controls.",
             wrap=True,
@@ -249,7 +260,7 @@ class C100Window(Adw.ApplicationWindow):
         outer.set_margin_start(16)
         outer.set_margin_end(8)
         self.hint = Gtk.Label(
-            label="Press a key on the pad to select it, or click a cell.",
+            label="Click a key. Ctrl+click adds, Shift+click fills a rectangle, drag to select a block. Color applies to every selected key.",
             wrap=True,
             xalign=0,
         )
@@ -260,12 +271,22 @@ class C100Window(Adw.ApplicationWindow):
         shell.add_css_class("pad-shell")
         grid = Gtk.Grid(column_spacing=6, row_spacing=6)
         grid.add_css_class("pad-grid")
+        self.pad_grid = grid
         for r in range(ROWS):
             for c in range(COLS):
                 cap = KeyCap(r, c)
-                cap.connect("clicked", self._on_cap_clicked)
+                click = Gtk.GestureClick()
+                click.set_button(1)
+                click.connect("pressed", self._on_cap_pressed, cap)
+                cap.add_controller(click)
                 self.keys[(r, c)] = cap
                 grid.attach(cap, c, r, 1, 1)
+        drag = Gtk.GestureDrag()
+        drag.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        grid.add_controller(drag)
         shell.append(grid)
         outer.append(shell)
 
@@ -302,6 +323,14 @@ class C100Window(Adw.ApplicationWindow):
         clear_color = Gtk.Button(label="Clear")
         clear_color.connect("clicked", self._clear_color)
         color_row.append(clear_color)
+        sel_row = Gtk.Box(spacing=8)
+        all_btn = Gtk.Button(label="Select all")
+        all_btn.connect("clicked", lambda *_: self._commit_selection(set(self.keys)))
+        none_btn = Gtk.Button(label="Clear selection")
+        none_btn.connect("clicked", lambda *_: self._commit_selection(set()))
+        sel_row.append(all_btn)
+        sel_row.append(none_btn)
+        box.append(sel_row)
         box.append(labeled("Key color", color_row))
 
         palette = Gtk.Box(spacing=4)
@@ -414,23 +443,149 @@ class C100Window(Adw.ApplicationWindow):
         self.text_box.set_visible(kind == "text")
         self.profile_box.set_visible(kind == "profile")
 
-    def _on_cap_clicked(self, cap: KeyCap) -> None:
-        self._select(cap.row, cap.col)
+    def _on_cap_pressed(self, gesture: Gtk.GestureClick, _n: int, _x: float, _y: float, cap: KeyCap) -> None:
+        if self._drag_moved:
+            return
+        state = gesture.get_current_event_state()
+        self._select_click(
+            (cap.row, cap.col),
+            add=bool(state & Gdk.ModifierType.CONTROL_MASK),
+            rect=bool(state & Gdk.ModifierType.SHIFT_MASK),
+        )
 
     def _select(self, row: int, col: int) -> None:
-        if self.selected:
-            self.keys[self.selected].set_selected(False)
-        self.selected = (row, col)
-        self.keys[(row, col)].set_selected(True)
-        if (row, col) in LOCKED_KEYS:
-            self.editor_title.set_text(f"{LOCKED_LABELS[(row, col)]}  ·  lighting")
+        self._select_click((row, col), add=False, rect=False)
+
+    def _select_click(self, cell: tuple[int, int], *, add: bool = False, rect: bool = False) -> None:
+        if rect and self.anchor:
+            cells = self._rect_cells(self.anchor, cell)
+        elif add:
+            cells = set(self.selected_cells)
+            if cell in cells:
+                cells.discard(cell)
+            else:
+                cells.add(cell)
+        else:
+            cells = {cell}
+        if not rect:
+            self.anchor = cell
+        self._commit_selection(cells, primary=cell)
+
+    def _rect_cells(self, a: tuple[int, int], b: tuple[int, int]) -> set[tuple[int, int]]:
+        r0, r1 = min(a[0], b[0]), max(a[0], b[0])
+        c0, c1 = min(a[1], b[1]), max(a[1], b[1])
+        return {(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
+
+    def _commit_selection(
+        self,
+        cells: set[tuple[int, int]],
+        primary: tuple[int, int] | None = None,
+    ) -> None:
+        self.selected_cells = set(cells)
+        if primary in self.selected_cells:
+            self.selected = primary
+        elif self.selected not in self.selected_cells:
+            self.selected = next(iter(sorted(self.selected_cells)), None)
+        if self.selected and not self.anchor:
+            self.anchor = self.selected
+        self._paint_selection(self.selected_cells)
+        self._update_editor_for_selection()
+
+    def _paint_selection(self, cells: set[tuple[int, int]], *, preview: bool = False) -> None:
+        for cell, cap in self.keys.items():
+            cap.set_selected(cell in cells and not preview)
+            if preview:
+                if cell in cells:
+                    cap.add_css_class("drag-preview")
+                else:
+                    cap.remove_css_class("drag-preview")
+            else:
+                cap.remove_css_class("drag-preview")
+
+    def _update_editor_for_selection(self) -> None:
+        n = len(self.selected_cells)
+        if n == 0:
+            self.editor_title.set_text("No key selected")
+            return
+        if n == 1:
+            row, col = next(iter(self.selected_cells))
+            if (row, col) in LOCKED_KEYS:
+                self.editor_title.set_text(f"{LOCKED_LABELS[(row, col)]}  ·  lighting")
+            else:
+                self.editor_title.set_text(f"Key {row},{col}")
+            self._load_binding(self._active_keys().get(key_id(row, col)))
             self._load_color(row, col)
             return
-        self.editor_title.set_text(f"Key {row},{col}")
-        keys = self._active_keys()
-        binding = keys.get(key_id(row, col))
-        self._load_binding(binding)
-        self._load_color(row, col)
+        self.editor_title.set_text(f"{n} keys selected")
+        if self.selected:
+            self._load_color(*self.selected)
+
+    def _on_drag_begin(self, gesture: Gtk.GestureDrag, x: float, y: float) -> None:
+        self._drag_start = (x, y)
+        self._drag_moved = False
+        self._drag_ctrl = bool(gesture.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK)
+
+    def _on_drag_update(self, _gesture: Gtk.GestureDrag, dx: float, dy: float) -> None:
+        if abs(dx) + abs(dy) < 10:
+            return
+        self._drag_moved = True
+        x0, y0 = self._drag_start
+        cells = self._cells_in_rect(x0, y0, x0 + dx, y0 + dy)
+        if self._drag_ctrl:
+            cells |= self.selected_cells
+        self._paint_selection(cells, preview=True)
+
+    def _on_drag_end(self, _gesture: Gtk.GestureDrag, dx: float, dy: float) -> None:
+        if not self._drag_moved:
+            return
+        x0, y0 = self._drag_start
+        cells = self._cells_in_rect(x0, y0, x0 + dx, y0 + dy)
+        if self._drag_ctrl:
+            cells |= self.selected_cells
+        hit = self._hit_cell(x0 + dx, y0 + dy) or self._hit_cell(x0, y0)
+        self._commit_selection(cells, primary=hit)
+        GLib.timeout_add(50, self._clear_drag_flag)
+
+    def _clear_drag_flag(self) -> bool:
+        self._drag_moved = False
+        return False
+
+    def _hit_cell(self, x: float, y: float) -> tuple[int, int] | None:
+        if not self.pad_grid:
+            return None
+        point = Graphene.Point()
+        point.x = x
+        point.y = y
+        for cell, cap in self.keys.items():
+            ok, bounds = cap.compute_bounds(self.pad_grid)
+            if ok and bounds.contains_point(point):
+                return cell
+        return None
+
+    def _cells_in_rect(self, x0: float, y0: float, x1: float, y1: float) -> set[tuple[int, int]]:
+        if not self.pad_grid:
+            return set()
+        left, right = min(x0, x1), max(x0, x1)
+        top, bottom = min(y0, y1), max(y0, y1)
+        box = Graphene.Rect()
+        box.init(left, top, max(1.0, right - left), max(1.0, bottom - top))
+        hit: set[tuple[int, int]] = set()
+        for cell, cap in self.keys.items():
+            ok, bounds = cap.compute_bounds(self.pad_grid)
+            if ok and bounds.intersection(box)[0]:
+                hit.add(cell)
+        return hit
+
+    def _on_win_key(self, _c: Gtk.EventControllerKey, keyval: int, _code: int, state: Gdk.ModifierType) -> bool:
+        focus = self.get_focus()
+        editable = isinstance(focus, (Gtk.Entry, Gtk.SearchEntry, Gtk.Text))
+        if keyval == Gdk.KEY_Escape:
+            self._commit_selection(set())
+            return True
+        if keyval in (Gdk.KEY_a, Gdk.KEY_A) and state & Gdk.ModifierType.CONTROL_MASK and not editable:
+            self._commit_selection(set(self.keys))
+            return True
+        return False
 
     def _load_binding(self, binding: dict[str, Any] | None) -> None:
         self._building = True
@@ -491,35 +646,40 @@ class C100Window(Adw.ApplicationWindow):
         self._building = was
 
     def _on_color(self, *_a: object) -> None:
-        if self._building or not self.selected:
+        if self._building or not self.selected_cells:
             return
         rgba = self.color_btn.get_rgba()
         hex_color = rgb_to_hex(int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255))
         self._push_color(hex_color)
 
     def _on_swatch(self, _btn: Gtk.Button, hex_color: str) -> None:
-        if not self.selected:
-            self._toast("Select a key first")
+        if not self.selected_cells:
+            self._toast("Select one or more keys first")
             return
         self._set_picker_hex(hex_color)
         self._push_color(hex_color)
 
     def _clear_color(self, *_a: object) -> None:
-        if not self.selected:
+        if not self.selected_cells:
             return
         self._push_color(None)
 
     def _push_color(self, hex_color: str | None) -> None:
-        if not self.selected:
+        cells = list(self.selected_cells)
+        if not cells and self.selected:
+            cells = [self.selected]
+        if not cells:
+            self._toast("Select one or more keys first")
             return
-        row, col = self.selected
-        resp = self._rpc("set_key_color", row=row, col=col, color=hex_color)
+        payload = [{"row": r, "col": c, "color": hex_color} for r, c in cells]
+        resp = self._rpc("set_key_colors", keys=payload)
         if resp and resp.get("ok"):
             lighting = (resp.get("lighting") or self.config.get("lighting") or {})
             self.config.setdefault("lighting", {}).update(lighting)
             if "keys" in lighting:
                 self.config["lighting"]["keys"] = lighting["keys"]
-            self.keys[(row, col)].apply_led_color(hex_color)
+            for cell in cells:
+                self.keys[cell].apply_led_color(hex_color)
             if int(self.effect.get_selected() or 0) != PER_KEY_EFFECT:
                 self._building = True
                 self.effect.set_selected(PER_KEY_EFFECT)
@@ -714,8 +874,12 @@ class C100Window(Adw.ApplicationWindow):
             cap.apply_binding(keys.get(key_id(r, c)))
             cap.apply_led_color(colors.get(key_id(r, c)))
         self._building = False
-        if self.selected:
-            self._select(*self.selected)
+        saved = set(self.selected_cells)
+        primary = self.selected
+        if saved:
+            self._commit_selection(saved, primary=primary)
+        elif primary:
+            self._commit_selection({primary}, primary=primary)
 
     def _pump(self) -> bool:
         if not self.client:
@@ -754,7 +918,7 @@ class C100Window(Adw.ApplicationWindow):
             if cap:
                 cap.set_pressed(bool(msg.get("pressed")))
             if msg.get("pressed"):
-                self._select(*cell)
+                self._select_click(cell, add=False, rect=False)
         elif ev in {"connected", "disconnected", "config", "profile", "lighting"}:
             if "config" in msg:
                 self.config = msg["config"]

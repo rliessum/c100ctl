@@ -18,3 +18,11 @@ class ColorTest(unittest.TestCase):
         h, s, v = rgb_to_hsv255(0, 255, 0)
         self.assertAlmostEqual(h, 85, delta=1)
         self.assertEqual((s, v), (255, 255))
+
+    def test_rect_cells(self):
+        r0, r1 = min(1, 3), max(1, 3)
+        c0, c1 = min(2, 4), max(2, 4)
+        cells = {(r, c) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)}
+        self.assertEqual(len(cells), 9)
+        self.assertIn((1, 2), cells)
+        self.assertIn((3, 4), cells)

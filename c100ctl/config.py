@@ -165,12 +165,16 @@ class Store:
         return value if isinstance(value, str) and value else None
 
     def set_key_color(self, row: int, col: int, color: str | None) -> None:
+        self.set_key_colors([(row, col, color)])
+
+    def set_key_colors(self, updates: list[tuple[int, int, str | None]]) -> None:
         keys = self.lighting_keys()
-        kid = key_id(row, col)
-        if color:
-            keys[kid] = color
-        else:
-            keys.pop(kid, None)
+        for row, col, color in updates:
+            kid = key_id(row, col)
+            if color:
+                keys[kid] = color
+            else:
+                keys.pop(kid, None)
         self.save()
 
     def snapshot(self) -> dict[str, Any]:

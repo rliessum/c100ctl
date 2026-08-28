@@ -288,25 +288,37 @@ class Engine:
         self._led_save_timer.start()
 
     def set_key_color(self, row: int, col: int, color: str | None) -> dict[str, Any]:
-        if color:
-            parse_hex_color(color)
-            color = color if color.startswith("#") else f"#{color.lstrip('#')}"
-        self.store.set_key_color(row, col, color)
+        return self.set_key_colors([(row, col, color)])
+
+    def set_key_colors(self, updates: list[tuple[int, int, str | None]]) -> dict[str, Any]:
+        normalized: list[tuple[int, int, str | None]] = []
+        for row, col, color in updates:
+            if color in ("", "off"):
+                color = None
+            if color:
+                parse_hex_color(color)
+                color = color if str(color).startswith("#") else f"#{str(color).lstrip('#')}"
+            normalized.append((int(row), int(col), color))
+        if not normalized:
+            return {"ok": False, "error": "no keys"}
+        self.store.set_key_colors(normalized)
         lighting = self.store.data.setdefault("lighting", {})
-        if color:
+        if any(color for _r, _c, color in normalized):
             lighting["effect"] = PER_KEY_EFFECT
             self.store.save()
         if self.via and self.connected:
-            if color:
+            if any(color for _r, _c, color in normalized):
                 self.via.enable_per_key(save=False)
-            self._write_key_color(row, col, color, save=True)
+            for row, col, color in normalized:
+                self._write_key_color(row, col, color, save=False)
+            self._schedule_led_save()
         payload = {
             "event": "lighting",
             "lighting": self.store.data.get("lighting", {}),
             "config": self.store.snapshot(),
         }
         self._broadcast(payload)
-        return {"ok": True, "color": color, "lighting": lighting}
+        return {"ok": True, "count": len(normalized), "lighting": lighting}
 
     def provision(self, backup: bool = True) -> None:
         if not self.via:
@@ -393,6 +405,15 @@ class Engine:
             if color == "" or color == "off":
                 color = None
             return self.set_key_color(int(req["row"]), int(req["col"]), color)
+        if op == "set_key_colors":
+            items = req.get("keys") or []
+            updates = []
+            for item in items:
+                color = item.get("color")
+                if color == "" or color == "off":
+                    color = None
+                updates.append((int(item["row"]), int(item["col"]), color))
+            return self.set_key_colors(updates)
         if op == "provision":
             self.provision(backup=req.get("backup", True))
             return {"ok": True}

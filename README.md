@@ -73,12 +73,20 @@ c100ctl bind 2 3 --clear
 
 c100ctl light --brightness 200 --effect 1
 c100ctl light --key 2,3 --color '#ff8800'
+c100ctl light --key 0,1 --key 0,2 --key 0,3 --color '#34c759'
 c100ctl light --key 2,3 --color off
 c100ctl profile --create gaming
 c100ctl profile --use gaming
 ```
 
-Per-key colors use the C100's **Per Key RGB** effect (23). Setting a key color switches to that effect automatically. In the GUI, select a key and use the color picker or the palette.
+Per-key colors use the C100's **Per Key RGB** effect (23). Setting a key color switches to that effect automatically. In the GUI, select keys and use the color picker or the palette.
+
+- Click a key to select it
+- **Ctrl+click** to add or remove keys
+- **Shift+click** to fill a rectangle from the last key
+- **Drag** across the pad to select a block
+- **Ctrl+A** selects all, **Esc** clears the selection
+- The chosen color is written to every selected key
 
 In the GUI: click a cell or **press the physical key** to select it, pick an action, bind. Corner keys are locked on purpose.
 

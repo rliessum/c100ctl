@@ -34,8 +34,12 @@ window.main {
 
 .keycap.selected {
   outline: 2px solid #f0a05a;
-  outline-offset: 1px;
-  background: #3a3128;
+  outline-offset: 2px;
+}
+
+.keycap.drag-preview {
+  outline: 2px dashed #f0a05a;
+  outline-offset: 2px;
 }
 
 .keycap.pressed {

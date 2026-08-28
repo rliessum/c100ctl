@@ -132,12 +132,17 @@ def cmd_provision(_args: argparse.Namespace) -> int:
 def cmd_light(args: argparse.Namespace) -> int:
     c = _client()
     try:
-        if args.key is not None:
-            try:
-                row, col = (int(x) for x in args.key.split(",", 1))
-            except ValueError as e:
-                raise SystemExit("expected --key row,col") from e
-            resp = c.request("set_key_color", row=row, col=col, color=args.color)
+        if args.key:
+            if args.color is None:
+                raise SystemExit("--key requires --color (hex like #ff8800, or off)")
+            cells = []
+            for item in args.key:
+                try:
+                    row, col = (int(x) for x in item.split(",", 1))
+                except ValueError as e:
+                    raise SystemExit(f"expected --key row,col, got {item!r}") from e
+                cells.append({"row": row, "col": col, "color": args.color})
+            resp = c.request("set_key_colors", keys=cells)
         else:
             fields: dict[str, Any] = {}
             if args.brightness is not None:
@@ -212,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     lgt.add_argument("--brightness", type=int)
     lgt.add_argument("--effect", type=int, help="0=off … 23=per-key RGB")
     lgt.add_argument("--speed", type=int)
-    lgt.add_argument("--key", help="cell as row,col, e.g. 2,3")
+    lgt.add_argument("--key", action="append", help="cell as row,col; repeat to paint many")
     lgt.add_argument("--color", help="hex color like #ff8800, or off")
 
     pr = sub.add_parser("profile", help="list or switch profiles")
