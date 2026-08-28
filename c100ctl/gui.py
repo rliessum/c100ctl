@@ -1419,7 +1419,7 @@ class C100Window(Adw.ApplicationWindow):
             application_name="C100 Control",
             version=__version__,
             developer_name="Built for Omarchy Linux",
-            comments="Host-side Keychron C100 8K controller. Binds keys to apps, commands, combos and macros. Talks VIA over raw HID.",
+            comments="Host-side Keychron C100 8K controller. Binds keys to apps, macros, URLs, media and lighting. Talks VIA over raw HID.",
         )
         win.present(self)
 

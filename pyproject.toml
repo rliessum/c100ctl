@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "c100ctl"
 version = "1.4.0"
-description = "Linux controller for the Keychron C100 8K macropad"
+description = "Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [

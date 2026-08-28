@@ -1,25 +1,37 @@
 # C100 Control
 
-Linux controller for the **Keychron C100 8K** 10×10 macropad. Built for [Omarchy](https://omarchy.org/) (Hyprland / Wayland), usable on any Linux desktop that can run GTK4.
+Linux host for the **Keychron C100 8K** 10×10 macropad. Built for [Omarchy](https://omarchy.org/) (Hyprland / Wayland); runs on any Linux desktop with GTK4.
 
-Keychron Launcher remaps firmware keys in a browser. Keychron Assistant (Windows/macOS only) can launch apps. This fills the Linux gap: a native app that binds each key to an **app**, **command**, **key combination**, **macro**, or **typed text**, and keeps working after you close the window.
+[Keychron Launcher](https://launcher.keychron.com/#/keymap) remaps firmware keys in a browser. Keychron Assistant (Windows/macOS only) can launch apps. This fills the Linux gap: a native GTK app plus a user daemon that binds each key to an action and keeps working after you close the window.
 
 ![C100 Control](docs/screenshot.png)
 
-## What it talks to
+## What you can do
 
-The C100 enumerates as USB `3434:042c` and speaks **VIA protocol 12** on HID usage page `0xFF60`. Four corner keys are firmware lighting controls and stay that way. The other 96 keys are yours.
+- Bind a key to an **app**, **command**, **key combination**, **macro**, **typed text**, **URL**, **media/system key**, **mouse click/scroll**, **lighting control**, or **profile switch**
+- **Tap** launches an app; **double-tap** closes the matching Hyprland window
+- **Hold** (400 ms) for a second action, including a momentary profile (layer-style)
+- **Chords**: two or more keys together fire one action
+- Per-key RGB, per-key effects, 24 matrix effects, **Mix RGB** (two zones, five timeline slots)
+- Polling rate (125–8000 Hz), debounce, NKRO, idle-dim
+- Macro recorder, lighting undo/redo, config import/export, key test heatmap
+
+Firmware keymap remapping, firmware flash, and Hall-effect features stay in Keychron Launcher. This app does not overwrite the identity keymap the daemon uses to tell keys apart.
+
+## How it talks to the pad
+
+The C100 enumerates as USB `3434:042c` and speaks **VIA protocol 12** on HID usage page `0xFF60`. Four corner keys are firmware lighting controls (`RGB −` / `RGB +`) and stay that way. The other 96 keys are yours.
 
 ```
 C100 8K ── USB ──► kernel hidraw / evdev
                       │
-                      ├─ VIA raw HID     firmware keymap + RGB
-                      └─ evdev grab      host bindings (apps / combos / macros)
+                      ├─ VIA raw HID     firmware RGB, Mix RGB, poll, debounce, NKRO
+                      └─ evdev grab      host bindings (apps / combos / macros / …)
 ```
 
-The daemon **exclusively grabs** the C100 input nodes so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos and typed text are injected through a virtual `uinput` keyboard.
+The daemon **exclusively grabs** the C100 input nodes so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos, text, media, and mouse events are injected through a virtual `uinput` device.
 
-On first connect, if the pad still has the factory map (every programmable key = `KC_1`), the daemon writes a unique identity keycode to each of the 96 keys so it can tell them apart. The previous map is saved under `~/.config/c100ctl/backups/`.
+On first connect, if the pad still has the factory map (every programmable key = `KC_1`), the daemon writes a unique identity keycode to each of the 96 keys. The previous map is saved under `~/.config/c100ctl/backups/`.
 
 ## Install
 
@@ -57,12 +69,137 @@ Then unplug and replug the pad (or log out and back in if `uaccess` needs a new 
 c100ctl doctor    # hidraw, VIA, evdev, uinput, Wayland
 ```
 
-## Use
+## GUI
 
 ```bash
-c100ctl              # GUI
+c100ctl              # or: c100ctl gui
+```
+
+Four pages at the bottom of the window:
+
+| Page | What it is |
+|------|------------|
+| **Keys** | 10×10 pad, bindings, per-key color, effect / brightness / speed |
+| **Mix RGB** | Two lighting zones and a timeline of effects per zone |
+| **Advanced** | Polling rate, debounce, NKRO, idle dim |
+| **Test** | Heatmap of physical key hits (bindings still fire) |
+
+Press a key on the pad to select it. Corner keys stay on firmware lighting.
+
+**Selection**
+
+- Click a key
+- **Ctrl+click** add or remove
+- **Shift+click** fill a rectangle from the last key
+- **Drag** across the pad
+- **Ctrl+A** all, **Esc** clear
+- **Select same color** in the lighting row
+
+**Menu** — provision identity map, new profile, save lighting into the current profile, import/export `config.json`, clear all key colors.
+
+## Bindings
+
+Each programmable cell has a type, a short label, and optional **On hold**.
+
+| Type | Fires |
+|------|--------|
+| Launch app | `.desktop` id (via `uwsm app` on Omarchy). Tap launches, double-tap closes the matching Hyprland window |
+| Run command | Shell command |
+| Key combination | Injected combo, e.g. `Super+Return` |
+| Macro | Step list (see below) |
+| Type text | Types the string |
+| Switch profile | Makes another binding profile active |
+| Open URL | `xdg-open` (https assumed if missing) |
+| Media / system | Play/pause, volume, brightness, … |
+| Mouse | Click or scroll |
+| Lighting control | Next/prev effect, brighter/dimmer, toggle, Per-key RGB, Mix RGB |
+
+**Hold** (400 ms, while the key is still down): a second action. **Momentary profile** switches for the hold and restores on release.
+
+**Chord**: select two or more keys, set the action, **Bind selected keys as a chord**. All those keys down together (within 50 ms) fire the chord instead of the individual bindings.
+
+**App close** matches Hyprland `class` / `StartupWMClass`, not Chrome PWA windows.
+
+### Media `--media`
+
+`playpause` `play` `pause` `stop` `next` `prev` `mute` `volup` `voldown` `micmute` `brightnessup` `brightnessdown` `eject` `www` `mail` `calculator` `homepage` `screenshot`
+
+### Mouse `--mouse`
+
+`left` `right` `middle` `back` `forward` `wheelup` `wheeldown`
+
+### Lighting `--light-action`
+
+`next` `prev` `brighter` `dimmer` `toggle` `perkey` `mix`
+
+### Macros
+
+Comma-separated steps. **Record macro** in the GUI captures keystrokes in the window. **Repeat while held** loops the macro until release.
+
+- `ctrl+c` — combo
+- `delay:80` — milliseconds
+- `text:hello` or a bare word — typed text
+- `down:shift` / `up:shift` — hold a modifier
+
+## Lighting
+
+Per-key colors use firmware **Per Key RGB** (effect **23**). Mix RGB is effect **24**. Setting a key color switches to per-key mode.
+
+**Keys page**
+
+- Brightness, matrix effect (0–24), speed
+- Global effect color (used by Solid / Breathing / some reactive modes)
+- Per-key FX: Solid, Breathing, Reactive, Reactive wide, Splash
+- Palette + color picker; undo / redo; clear all
+
+**Mix RGB page**
+
+- Paint keys into Zone 1 or Zone 2
+- Up to five timeline slots per zone: effect, hue, saturation, speed, duration 1–99 s
+- **Write Mix RGB to pad**
+
+**Save lighting to profile** stores the current lighting with the active binding profile so switching profiles can restore it.
+
+Effects 0–24:
+
+| # | Effect | # | Effect |
+|---|--------|---|--------|
+| 0 | None | 13 | Rainbow Beacon |
+| 1 | Solid Color | 14 | Jellybean Raindrops |
+| 2 | Breathing | 15 | Pixel Rain |
+| 3 | Band Spiral Val | 16 | Typing Heatmap |
+| 4 | Cycle All | 17 | Digital Rain |
+| 5 | Cycle Left Right | 18 | Reactive Simple |
+| 6 | Cycle Up Down | 19 | Reactive Multiwide |
+| 7 | Rainbow Moving Chevron | 20 | Reactive Multinexus |
+| 8 | Cycle Out In | 21 | Splash |
+| 9 | Cycle Out In Dual | 22 | Solid Splash |
+| 10 | Cycle Pinwheel | 23 | Per Key RGB |
+| 11 | Cycle Spiral | 24 | Mix RGB |
+| 12 | Dual Beacon | | |
+
+## Advanced
+
+Written only when you click **Apply** in the GUI or run `c100ctl advanced` — not on every daemon start.
+
+| Setting | Values |
+|---------|--------|
+| USB polling rate | 8000, 4000, 2000, 1000, 500, 250, 125 Hz |
+| Debounce mode | 0 defer global, 1 defer per row, 2 defer per key, 3 eager per row, **4 eager per key** (recommended), 5 eager defer per key, 6 none |
+| Debounce time | milliseconds |
+| NKRO | on/off |
+| Idle dim | seconds of no pad input before brightness goes to 0 (host-side; 0 = off). Next key restores brightness |
+
+Firmware version is shown in the header (read from the pad).
+
+## CLI
+
+```bash
+c100ctl                  # GUI
 c100ctl status
+c100ctl doctor
 c100ctl list
+c100ctl provision        # rewrite identity keycodes (backs up first)
 
 c100ctl bind 2 3 --app kitty.desktop --label Kitty
 c100ctl bind 0 1 --combo 'Super+Return' --label Terminal
@@ -77,59 +214,30 @@ c100ctl bind 2 0 --app kitty.desktop --hold-profile gaming --hold-momentary
 c100ctl bind 2 3 --clear
 
 c100ctl light --brightness 200 --effect 1 --speed 180 --effect-color '#ff8800'
+c100ctl light --per-key-type 1          # breathing
 c100ctl light --key 2,3 --color '#ff8800'
 c100ctl light --key 0,1 --key 0,2 --key 0,3 --color '#00ff00'
 c100ctl light --key 2,3 --color off
-c100ctl advanced --poll 8000 --debounce-type 4 --debounce-ms 5 --nkro 1
+
+c100ctl advanced --poll 8000 --debounce-type 4 --debounce-ms 5 --nkro 1 --idle-dim 0
+
+c100ctl profile                 # list
 c100ctl profile --create gaming
 c100ctl profile --use gaming
 ```
 
-The GUI has four pages: **Keys**, **Mix RGB**, **Advanced**, **Test**.
-
-**Keys.** Click a cell or press the physical key. Ctrl/Shift/drag for multi-select. Bindings:
-
-- App / command / combo / macro / text / profile (as before)
-- **Open URL**, **media** (play, volume, brightness…), **mouse** (click / scroll), **lighting control** (next effect, brighter, toggle…)
-- **On hold**: a second action after 400ms, including momentary profile (layer-style)
-- **Chord**: select two or more keys, set the action, “Bind selected keys as a chord”
-- App keys: **tap launches**, **double-tap closes** the matching Hyprland window
-- Macro **Record** captures keystrokes in the window
-
-**Lighting.** Brightness, effect, speed, global effect color, per-key FX (solid / breathing / reactive / splash). Paint per-key colors with the palette; undo/redo; select same color; clear all. Mix RGB is its own page: two zones, five timeline slots each (1–99s). Lighting can be saved into the active binding profile.
-
-**Advanced.** USB polling rate (125–8000 Hz), debounce mode/time, NKRO, idle-dim timeout. Applied only when you click Apply (not on every daemon start).
-
-**Test.** Heatmap of physical key hits.
-
-Menu: import/export `config.json`, provision identity map, new profile.
-
-Per-key colors use the C100 **Per Key RGB** effect (23). Mix RGB is effect 24.
-
-- Click a key to select it
-- **Ctrl+click** to add or remove keys
-- **Shift+click** to fill a rectangle from the last key
-- **Drag** across the pad to select a block
-- **Ctrl+A** selects all, **Esc** clears the selection
-- The chosen color is written to every selected key
-
-Corner keys stay on the firmware lighting controls.
-
-Macro syntax is comma-separated steps:
-
-- `ctrl+c` — combo
-- `delay:80` — milliseconds
-- `text:hello` or a bare word — typed text
-- `down:shift` / `up:shift` — hold
-- `repeat: hold` on a macro binding repeats while the key is down
+Cells are `row,col` with row 0 at the top and col 0 at the left. Corners `0,0` `0,9` `9,0` `9,9` cannot be bound.
 
 ## Files
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/c100ctl/config.json` | bindings and profiles |
-| `~/.config/c100ctl/backups/` | VIA keymap snapshots |
+| `~/.config/c100ctl/config.json` | bindings, lighting, Mix RGB, advanced, chords, profiles |
+| `~/.config/c100ctl/backups/` | VIA keymap snapshots from provision |
 | `$XDG_RUNTIME_DIR/c100ctl/c100ctl.sock` | GUI/CLI ↔ daemon |
+| `$XDG_RUNTIME_DIR/c100ctl/c100ctl.lock` | single-instance lock |
+
+Config version is **2**. `lighting.keys` maps `"row,col"` to a hex color. `chords` is a list of `{keys, binding}`. A profile may include its own `lighting` object (written by **Save lighting to profile**).
 
 ## Uninstall
 
