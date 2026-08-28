@@ -798,9 +798,17 @@ class Engine:
         if backup:
             dest = backup_dir()
             dest.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(dest, 0o700)
+            except OSError:
+                pass
             stamp = time.strftime("%Y%m%d-%H%M%S")
             path = dest / f"keymap-{stamp}.json"
-            path.write_text(json.dumps({"layers": keymap}, indent=2))
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, json.dumps({"layers": keymap}, indent=2).encode("utf-8"))
+            finally:
+                os.close(fd)
             log.info("backed up keymap to %s", path)
         identity = layer_with_identity(keymap[0])
         for layer in range(self.layers or 4):
