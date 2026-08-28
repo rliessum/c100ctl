@@ -1,0 +1,17 @@
+[run]
+branch = True
+source = c100ctl
+omit =
+    c100ctl/gui.py
+    c100ctl/__main__.py
+    c100ctl/__init__.py
+
+[report]
+show_missing = True
+skip_covered = False
+skip_empty = True
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+fail_under = 80

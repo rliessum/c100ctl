@@ -249,6 +249,29 @@ rm -f ~/.local/share/applications/c100ctl.desktop
 rm -f ~/.config/systemd/user/c100ctl.service
 ```
 
+## Tests
+
+Unit tests do not need the pad. A live hardware check is skipped automatically if it is unplugged.
+
+```bash
+# from the repo root, with the same Python that has evdev/gobject
+python3 -m unittest discover -s tests -v
+
+# coverage (omit GTK UI)
+python3 -m pip install -e '.[test]'   # pytest, pytest-cov, coverage
+python3 -m coverage run -m unittest discover -s tests
+python3 -m coverage report
+python3 -m pytest --cov=c100ctl --cov-report=term-missing
+```
+
+Live hardware test (skips if the daemon holds the VIA interface):
+
+```bash
+systemctl --user stop c100ctl.service
+python3 -m unittest tests.test_hardware
+systemctl --user start c100ctl.service
+```
+
 ## License
 
 MIT. Keychron is a trademark of its respective owner; this project is not affiliated with Keychron.

@@ -1,13 +1,30 @@
 import unittest
 
-from c100ctl.via import hsv255_to_rgb, parse_hex_color, poll_div_from_hz, poll_hz_from_div, rgb_to_hex, rgb_to_hsv255
+from c100ctl.via import (
+    _led_green,
+    hsv255_to_rgb,
+    parse_hex_color,
+    poll_div_from_hz,
+    poll_hz_from_div,
+    rgb_to_hex,
+    rgb_to_hsv255,
+)
 
 
 class ColorTest(unittest.TestCase):
     def test_hex_roundtrip(self):
         self.assertEqual(parse_hex_color("#ff0000"), (255, 0, 0))
         self.assertEqual(parse_hex_color("0f0"), (0, 255, 0))
+        self.assertEqual(parse_hex_color("AABBCC"), (0xAA, 0xBB, 0xCC))
         self.assertEqual(rgb_to_hex(0, 0, 255), "#0000ff")
+
+    def test_invalid_hex(self):
+        with self.assertRaises(ValueError):
+            parse_hex_color("#gg0000")
+        with self.assertRaises(ValueError):
+            parse_hex_color("12")
+        with self.assertRaises(ValueError):
+            parse_hex_color("#12345")
 
     def test_hsv_red(self):
         self.assertEqual(rgb_to_hsv255(255, 0, 0), (0, 255, 255))
@@ -19,6 +36,12 @@ class ColorTest(unittest.TestCase):
         self.assertAlmostEqual(h, 85, delta=1)
         self.assertEqual((s, v), (255, 255))
 
+    def test_white_and_black(self):
+        self.assertEqual(rgb_to_hsv255(0, 0, 0)[2], 0)
+        h, s, v = rgb_to_hsv255(255, 255, 255)
+        self.assertEqual(s, 0)
+        self.assertEqual(v, 255)
+
     def test_mint_green_reads_as_green_on_leds(self):
         h, s, v = rgb_to_hsv255(0x34, 0xC7, 0x59)
         self.assertGreaterEqual(h, 75)
@@ -29,11 +52,18 @@ class ColorTest(unittest.TestCase):
         h, s, v = rgb_to_hsv255(0x00, 0xC7, 0xBE)
         self.assertGreater(h, 115)
 
+    def test_led_green_ignores_low_sat(self):
+        self.assertEqual(_led_green(96, 10), (96, 10))
+        self.assertEqual(_led_green(20, 255), (20, 255))
+
     def test_poll_div(self):
         self.assertEqual(poll_hz_from_div(0), 8000)
         self.assertEqual(poll_hz_from_div(3), 1000)
+        self.assertEqual(poll_hz_from_div(6), 125)
+        self.assertEqual(poll_hz_from_div(99), 125)
         self.assertEqual(poll_div_from_hz(8000), 0)
         self.assertEqual(poll_div_from_hz(1000), 3)
+        self.assertEqual(poll_div_from_hz(900), 3)
 
     def test_rect_cells(self):
         r0, r1 = min(1, 3), max(1, 3)

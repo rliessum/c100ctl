@@ -31,8 +31,28 @@ Homepage = "https://github.com/rliessum/c100ctl"
 Issues = "https://github.com/rliessum/c100ctl/issues"
 Source = "https://github.com/rliessum/c100ctl"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "coverage>=7",
+]
+
 [project.scripts]
 c100ctl = "c100ctl.__main__:main"
+
+[tool.coverage.run]
+branch = true
+source = ["c100ctl"]
+omit = ["c100ctl/gui.py", "c100ctl/__main__.py", "c100ctl/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
 
 [tool.setuptools.packages.find]
 include = ["c100ctl*"]

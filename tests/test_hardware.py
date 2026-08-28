@@ -2,6 +2,13 @@
 
 import unittest
 
+try:
+    import pytest
+
+    pytestmark = pytest.mark.hardware
+except ImportError:
+    pass
+
 from c100ctl.device import find_c100
 from c100ctl.identity import looks_factory
 from c100ctl.via import ViaClient
@@ -9,6 +16,10 @@ from c100ctl.via import ViaClient
 
 class HardwareTest(unittest.TestCase):
     def setUp(self):
+        from c100ctl.ipc import daemon_available
+
+        if daemon_available():
+            self.skipTest("c100ctl daemon holds the VIA interface — stop it to run live tests")
         self.device = find_c100()
         if not self.device:
             self.skipTest("Keychron C100 8K not connected")
