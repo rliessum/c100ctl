@@ -47,7 +47,7 @@ def default_config() -> dict[str, Any]:
         "version": CONFIG_VERSION,
         "provisioned": False,
         "active_profile": "default",
-        "lighting": {"brightness": 255, "effect": 1, "speed": 127},
+        "lighting": {"brightness": 255, "effect": 1, "speed": 127, "keys": {}},
         "profiles": {
             "default": {"label": "Default", "keys": {}},
         },
@@ -97,6 +97,8 @@ class Store:
             cfg["profiles"] = raw["profiles"]
         if "lighting" in raw and isinstance(raw["lighting"], dict):
             cfg["lighting"].update(raw["lighting"])
+            if not isinstance(cfg["lighting"].get("keys"), dict):
+                cfg["lighting"]["keys"] = {}
         self.data = cfg
 
     def save(self) -> None:
@@ -148,6 +150,27 @@ class Store:
         self.data["profiles"].pop(name, None)
         if self.data["active_profile"] == name:
             self.data["active_profile"] = "default"
+        self.save()
+
+    def lighting_keys(self) -> dict[str, str]:
+        lighting = self.data.setdefault("lighting", {})
+        keys = lighting.setdefault("keys", {})
+        if not isinstance(keys, dict):
+            lighting["keys"] = {}
+            return lighting["keys"]
+        return keys
+
+    def get_key_color(self, row: int, col: int) -> str | None:
+        value = self.lighting_keys().get(key_id(row, col))
+        return value if isinstance(value, str) and value else None
+
+    def set_key_color(self, row: int, col: int, color: str | None) -> None:
+        keys = self.lighting_keys()
+        kid = key_id(row, col)
+        if color:
+            keys[kid] = color
+        else:
+            keys.pop(kid, None)
         self.save()
 
     def snapshot(self) -> dict[str, Any]:

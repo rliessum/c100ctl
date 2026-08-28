@@ -41,6 +41,18 @@ RGB_EFFECT = 2
 RGB_SPEED = 3
 RGB_COLOR = 4
 
+# Keychron custom RGB (HID command 0xA8), used for per-key colors.
+KC_RGB = 0xA8
+KC_RGB_SAVE = 2
+KC_RGB_LED_COUNT = 5
+KC_RGB_LED_NUMBER = 6
+KC_RGB_GET_EFFECT = 7
+KC_RGB_SET_EFFECT = 8
+KC_RGB_GET_COLOR = 9
+KC_RGB_SET_COLOR = 10
+PER_KEY_EFFECT = 23
+LEDS_PER_PACKET = 9
+
 BUFFER_CHUNK = 28
 
 
@@ -200,3 +212,82 @@ class ViaClient:
 
     def set_color_hsv(self, hue: int, sat: int, save: bool = True) -> None:
         self.set_rgb(RGB_COLOR, [hue & 0xFF, sat & 0xFF], save=save)
+
+    def led_count(self) -> int:
+        r = self._cmd([KC_RGB, KC_RGB_LED_COUNT])
+        return r[3]
+
+    def led_map(self, rows: int = 10, cols: int = 10) -> list[list[int]]:
+        """Matrix row/col → LED index.  C100 is identity (row * cols + col)."""
+        grid: list[list[int]] = []
+        for row in range(rows):
+            r = self._cmd([KC_RGB, KC_RGB_LED_NUMBER, row, 255, 255, 255])
+            indices = [int(x) for x in r[3 : 3 + cols]]
+            grid.append(indices)
+        return grid
+
+    def enable_per_key(self, save: bool = True) -> None:
+        self.set_effect(PER_KEY_EFFECT, save=save)
+        self._cmd([KC_RGB, KC_RGB_SET_EFFECT, PER_KEY_EFFECT])
+
+    def save_leds(self) -> None:
+        self._cmd([KC_RGB, KC_RGB_SAVE])
+
+    def get_led_hsv(self, start: int, count: int) -> list[tuple[int, int, int]]:
+        count = max(1, min(LEDS_PER_PACKET, count))
+        r = self._cmd([KC_RGB, KC_RGB_GET_COLOR, start & 0xFF, count])
+        out: list[tuple[int, int, int]] = []
+        for i in range(count):
+            o = 3 + i * 3
+            out.append((r[o], r[o + 1], r[o + 2]))
+        return out
+
+    def set_led_hsv(self, index: int, hsv: tuple[int, int, int]) -> None:
+        h, s, v = hsv
+        self._cmd([KC_RGB, KC_RGB_SET_COLOR, index & 0xFF, 1, h & 0xFF, s & 0xFF, v & 0xFF])
+
+    def set_leds_hsv(self, start: int, colors: Sequence[tuple[int, int, int]]) -> None:
+        chunk = list(colors)[:LEDS_PER_PACKET]
+        payload: list[int] = [KC_RGB, KC_RGB_SET_COLOR, start & 0xFF, len(chunk)]
+        for h, s, v in chunk:
+            payload.extend([h & 0xFF, s & 0xFF, v & 0xFF])
+        self._cmd(payload)
+
+    def set_led_rgb(self, index: int, rgb: tuple[int, int, int]) -> None:
+        self.set_led_hsv(index, rgb_to_hsv255(*rgb))
+
+    def write_all_rgb(self, colors: Sequence[tuple[int, int, int]], save: bool = True) -> None:
+        i = 0
+        hsv = [rgb_to_hsv255(*c) for c in colors]
+        while i < len(hsv):
+            self.set_leds_hsv(i, hsv[i : i + LEDS_PER_PACKET])
+            i += LEDS_PER_PACKET
+        if save:
+            self.save_leds()
+
+
+def rgb_to_hsv255(r: int, g: int, b: int) -> tuple[int, int, int]:
+    import colorsys
+
+    h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    return int(round(h * 255)), int(round(s * 255)), int(round(v * 255))
+
+
+def hsv255_to_rgb(h: int, s: int, v: int) -> tuple[int, int, int]:
+    import colorsys
+
+    r, g, b = colorsys.hsv_to_rgb(h / 255.0, s / 255.0, v / 255.0)
+    return int(round(r * 255)), int(round(g * 255)), int(round(b * 255))
+
+
+def parse_hex_color(value: str) -> tuple[int, int, int]:
+    s = value.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        raise ValueError(f"invalid color {value!r}")
+    return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+
+
+def rgb_to_hex(r: int, g: int, b: int) -> str:
+    return f"#{r:02x}{g:02x}{b:02x}"

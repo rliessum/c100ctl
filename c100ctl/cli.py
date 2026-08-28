@@ -130,23 +130,30 @@ def cmd_provision(_args: argparse.Namespace) -> int:
 
 
 def cmd_light(args: argparse.Namespace) -> int:
-    fields: dict[str, Any] = {}
-    if args.brightness is not None:
-        fields["brightness"] = args.brightness
-    if args.effect is not None:
-        fields["effect"] = args.effect
-    if args.speed is not None:
-        fields["speed"] = args.speed
-    if not fields:
-        raise SystemExit("specify --brightness, --effect, or --speed")
     c = _client()
     try:
-        resp = c.request("set_lighting", **fields)
+        if args.key is not None:
+            try:
+                row, col = (int(x) for x in args.key.split(",", 1))
+            except ValueError as e:
+                raise SystemExit("expected --key row,col") from e
+            resp = c.request("set_key_color", row=row, col=col, color=args.color)
+        else:
+            fields: dict[str, Any] = {}
+            if args.brightness is not None:
+                fields["brightness"] = args.brightness
+            if args.effect is not None:
+                fields["effect"] = args.effect
+            if args.speed is not None:
+                fields["speed"] = args.speed
+            if not fields:
+                raise SystemExit("specify --brightness, --effect, --speed, or --key")
+            resp = c.request("set_lighting", **fields)
     finally:
         c.close()
     if not resp.get("ok"):
         raise SystemExit(resp.get("error", "lighting failed"))
-    print(resp.get("lighting"))
+    print(resp.get("lighting") or resp)
     return 0
 
 
@@ -201,10 +208,12 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--label", help="short label shown on the pad")
     b.add_argument("--clear", action="store_true")
 
-    lgt = sub.add_parser("light", help="set RGB brightness/effect")
+    lgt = sub.add_parser("light", help="set RGB brightness, effect, or per-key color")
     lgt.add_argument("--brightness", type=int)
-    lgt.add_argument("--effect", type=int)
+    lgt.add_argument("--effect", type=int, help="0=off … 23=per-key RGB")
     lgt.add_argument("--speed", type=int)
+    lgt.add_argument("--key", help="cell as row,col, e.g. 2,3")
+    lgt.add_argument("--color", help="hex color like #ff8800, or off")
 
     pr = sub.add_parser("profile", help="list or switch profiles")
     pr.add_argument("--use")

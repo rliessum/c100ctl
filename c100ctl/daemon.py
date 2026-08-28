@@ -18,7 +18,7 @@ from .device import find_c100, hidraw_exists
 from .identity import layer_with_identity, looks_factory
 from .ipc import IpcServer
 from .pad import PadGrab
-from .via import ViaClient, ViaError
+from .via import PER_KEY_EFFECT, ViaClient, ViaError, parse_hex_color, rgb_to_hsv255
 
 log = logging.getLogger("c100ctl.daemon")
 
@@ -69,6 +69,8 @@ class Engine:
         self._jobs_cv = threading.Condition()
         self._worker = threading.Thread(target=self._action_loop, name="c100-actions", daemon=True)
         self._worker.start()
+        self._led_map: list[list[int]] | None = None
+        self._led_save_timer: threading.Timer | None = None
 
     def start_ipc(self) -> None:
         self.ipc = IpcServer(self.handle)
@@ -123,6 +125,11 @@ class Engine:
                 self.provision(backup=True)
             except Exception:
                 log.exception("provision failed")
+        try:
+            self._led_map = via.led_map(ROWS, COLS)
+        except Exception:
+            log.exception("LED map failed")
+            self._led_map = None
         try:
             self._apply_lighting()
         except Exception:
@@ -204,12 +211,102 @@ class Engine:
         if not self.via:
             return
         lighting = self.store.data.get("lighting", {})
+        colors = lighting.get("keys") or {}
+        if colors:
+            lighting["effect"] = PER_KEY_EFFECT
         if "brightness" in lighting:
             self.via.set_brightness(int(lighting["brightness"]), save=True)
         if "effect" in lighting:
-            self.via.set_effect(int(lighting["effect"]), save=True)
+            effect = int(lighting["effect"])
+            self.via.set_effect(effect, save=True)
+            if effect == PER_KEY_EFFECT:
+                self.via.enable_per_key(save=False)
         if "speed" in lighting:
             self.via.set_speed(int(lighting["speed"]), save=True)
+        if colors:
+            self._write_all_key_colors(dict(colors), save=True)
+
+    def _led_index(self, row: int, col: int) -> int:
+        if self._led_map and 0 <= row < len(self._led_map) and 0 <= col < len(self._led_map[row]):
+            return int(self._led_map[row][col])
+        return row * COLS + col
+
+    def _write_key_color(self, row: int, col: int, color: str | None, save: bool = False) -> None:
+        if not self.via:
+            return
+        index = self._led_index(row, col)
+        if color:
+            hsv = rgb_to_hsv255(*parse_hex_color(color))
+        else:
+            hsv = (0, 0, 0)
+        self.via.set_led_hsv(index, hsv)
+        if save:
+            self._schedule_led_save()
+
+    def _write_all_key_colors(self, colors: dict[str, str], save: bool = True) -> None:
+        if not self.via:
+            return
+        packed: dict[int, tuple[int, int, int]] = {}
+        for kid, hex_color in colors.items():
+            try:
+                r, c = (int(x) for x in kid.split(",", 1))
+                packed[self._led_index(r, c)] = rgb_to_hsv255(*parse_hex_color(hex_color))
+            except (ValueError, TypeError):
+                continue
+        if not packed:
+            return
+        start = min(packed)
+        end = max(packed)
+        i = start
+        while i <= end:
+            chunk: list[tuple[int, int, int]] = []
+            j = i
+            while j <= end and len(chunk) < 9 and j in packed:
+                chunk.append(packed[j])
+                j += 1
+            if chunk:
+                self.via.set_leds_hsv(i, chunk)
+                i = j
+            else:
+                i += 1
+        if save:
+            self.via.save_leds()
+
+    def _schedule_led_save(self) -> None:
+        if self._led_save_timer:
+            self._led_save_timer.cancel()
+
+        def _save() -> None:
+            try:
+                if self.via:
+                    self.via.save_leds()
+            except Exception:
+                log.exception("save LED conf failed")
+
+        self._led_save_timer = threading.Timer(0.4, _save)
+        self._led_save_timer.daemon = True
+        self._led_save_timer.start()
+
+    def set_key_color(self, row: int, col: int, color: str | None) -> dict[str, Any]:
+        if color:
+            parse_hex_color(color)
+            color = color if color.startswith("#") else f"#{color.lstrip('#')}"
+        self.store.set_key_color(row, col, color)
+        lighting = self.store.data.setdefault("lighting", {})
+        if color:
+            lighting["effect"] = PER_KEY_EFFECT
+            self.store.save()
+        if self.via and self.connected:
+            if color:
+                self.via.enable_per_key(save=False)
+            self._write_key_color(row, col, color, save=True)
+        payload = {
+            "event": "lighting",
+            "lighting": self.store.data.get("lighting", {}),
+            "config": self.store.snapshot(),
+        }
+        self._broadcast(payload)
+        return {"ok": True, "color": color, "lighting": lighting}
 
     def provision(self, backup: bool = True) -> None:
         if not self.via:
@@ -229,18 +326,14 @@ class Engine:
         self.store.save()
 
     def status(self) -> dict[str, Any]:
-        lighting = {}
+        lighting = dict(self.store.data.get("lighting") or {})
         if self.via and self.connected:
             try:
-                lighting = {
-                    "brightness": self.via.brightness(),
-                    "effect": self.via.effect(),
-                    "speed": self.via.speed(),
-                }
+                lighting["brightness"] = self.via.brightness()
+                lighting["effect"] = self.via.effect()
+                lighting["speed"] = self.via.speed()
             except ViaError:
-                lighting = self.store.data.get("lighting", {})
-        else:
-            lighting = self.store.data.get("lighting", {})
+                pass
         return {
             "ok": True,
             "version": __version__,
@@ -293,8 +386,13 @@ class Engine:
             self.store.save()
             if self.via and self.connected:
                 self._apply_lighting()
-            self._broadcast({"event": "lighting", "lighting": lighting})
+            self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
             return {"ok": True, "lighting": lighting}
+        if op == "set_key_color":
+            color = req.get("color")
+            if color == "" or color == "off":
+                color = None
+            return self.set_key_color(int(req["row"]), int(req["col"]), color)
         if op == "provision":
             self.provision(backup=req.get("backup", True))
             return {"ok": True}

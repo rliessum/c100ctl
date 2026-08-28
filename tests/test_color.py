@@ -1,0 +1,20 @@
+import unittest
+
+from c100ctl.via import hsv255_to_rgb, parse_hex_color, rgb_to_hex, rgb_to_hsv255
+
+
+class ColorTest(unittest.TestCase):
+    def test_hex_roundtrip(self):
+        self.assertEqual(parse_hex_color("#ff0000"), (255, 0, 0))
+        self.assertEqual(parse_hex_color("0f0"), (0, 255, 0))
+        self.assertEqual(rgb_to_hex(0, 0, 255), "#0000ff")
+
+    def test_hsv_red(self):
+        self.assertEqual(rgb_to_hsv255(255, 0, 0), (0, 255, 255))
+        r, g, b = hsv255_to_rgb(0, 255, 255)
+        self.assertEqual((r, g, b), (255, 0, 0))
+
+    def test_hsv_green(self):
+        h, s, v = rgb_to_hsv255(0, 255, 0)
+        self.assertAlmostEqual(h, 85, delta=1)
+        self.assertEqual((s, v), (255, 255))

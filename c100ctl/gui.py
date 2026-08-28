@@ -22,6 +22,22 @@ from .config import BINDING_TYPES, key_id
 from .css import APP_CSS
 from .daemon import RGB_EFFECTS
 from .ipc import IpcClient, daemon_available
+from .via import PER_KEY_EFFECT, parse_hex_color, rgb_to_hex
+
+PALETTE = (
+    "#ff3b30",
+    "#ff9500",
+    "#ffcc00",
+    "#34c759",
+    "#00c7be",
+    "#007aff",
+    "#5856d6",
+    "#af52de",
+    "#ff2d55",
+    "#ffffff",
+    "#8e8e93",
+    "#1c1c1e",
+)
 
 log = logging.getLogger("c100ctl.gui")
 
@@ -112,6 +128,28 @@ class KeyCap(Gtk.Button):
                 label = binding.get("profile") or "profile"
         self.title.set_text(label)
         self.sub.set_text(kind)
+
+    def apply_led_color(self, hex_color: str | None) -> None:
+        if not hasattr(self, "_led_css"):
+            self._led_css = Gtk.CssProvider()
+            self.get_style_context().add_provider(
+                self._led_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+        if not hex_color:
+            self._led_css.load_from_data(b"")
+            return
+        try:
+            r, g, b = parse_hex_color(hex_color)
+        except ValueError:
+            self._led_css.load_from_data(b"")
+            return
+        y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        fg = "#1a1a1a" if y > 155 else "#f4f1ea"
+        css = (
+            f".keycap {{ background: {hex_color}; color: {fg}; "
+            f"border: 1px solid {hex_color}; }}"
+        ).encode()
+        self._led_css.load_from_data(css)
 
     def set_selected(self, selected: bool) -> None:
         if selected:
@@ -255,6 +293,35 @@ class C100Window(Adw.ApplicationWindow):
         self.editor_title.add_css_class("title-3")
         box.append(self.editor_title)
 
+        color_row = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
+        dialog = Gtk.ColorDialog()
+        dialog.set_with_alpha(False)
+        self.color_btn = Gtk.ColorDialogButton(dialog=dialog)
+        self.color_btn.connect("notify::rgba", self._on_color)
+        color_row.append(self.color_btn)
+        clear_color = Gtk.Button(label="Clear")
+        clear_color.connect("clicked", self._clear_color)
+        color_row.append(clear_color)
+        box.append(labeled("Key color", color_row))
+
+        palette = Gtk.Box(spacing=4)
+        palette.set_halign(Gtk.Align.START)
+        for hex_color in PALETTE:
+            swatch = Gtk.Button()
+            swatch.add_css_class("color-swatch")
+            swatch.set_tooltip_text(hex_color)
+            provider = Gtk.CssProvider()
+            provider.load_from_data(
+                f".color-swatch {{ min-width: 22px; min-height: 22px; padding: 0; "
+                f"border-radius: 11px; background: {hex_color}; }}".encode()
+            )
+            swatch.get_style_context().add_provider(
+                provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+            swatch.connect("clicked", self._on_swatch, hex_color)
+            palette.append(swatch)
+        box.append(palette)
+
         self.type_drop = Gtk.DropDown.new_from_strings([TYPE_LABELS[t] for t in BINDING_TYPES])
         self.type_drop.connect("notify::selected", lambda *_: self._sync_type_fields())
         box.append(labeled("Action", self.type_drop))
@@ -356,13 +423,14 @@ class C100Window(Adw.ApplicationWindow):
         self.selected = (row, col)
         self.keys[(row, col)].set_selected(True)
         if (row, col) in LOCKED_KEYS:
-            self.editor_title.set_text(f"{LOCKED_LABELS[(row, col)]}  ·  locked")
+            self.editor_title.set_text(f"{LOCKED_LABELS[(row, col)]}  ·  lighting")
+            self._load_color(row, col)
             return
         self.editor_title.set_text(f"Key {row},{col}")
-        binding = None
         keys = self._active_keys()
         binding = keys.get(key_id(row, col))
         self._load_binding(binding)
+        self._load_color(row, col)
 
     def _load_binding(self, binding: dict[str, Any] | None) -> None:
         self._building = True
@@ -399,6 +467,63 @@ class C100Window(Adw.ApplicationWindow):
                 i += 1
         self._building = False
         self._sync_type_fields()
+
+    def _key_colors(self) -> dict[str, str]:
+        return (self.config.get("lighting") or {}).get("keys") or {}
+
+    def _load_color(self, row: int, col: int) -> None:
+        hex_color = self._key_colors().get(key_id(row, col), "#2a2e33")
+        self._set_picker_hex(hex_color)
+
+    def _set_picker_hex(self, hex_color: str) -> None:
+        try:
+            r, g, b = parse_hex_color(hex_color)
+        except ValueError:
+            r, g, b = 42, 46, 51
+        rgba = Gdk.RGBA()
+        rgba.red = r / 255
+        rgba.green = g / 255
+        rgba.blue = b / 255
+        rgba.alpha = 1
+        was = self._building
+        self._building = True
+        self.color_btn.set_rgba(rgba)
+        self._building = was
+
+    def _on_color(self, *_a: object) -> None:
+        if self._building or not self.selected:
+            return
+        rgba = self.color_btn.get_rgba()
+        hex_color = rgb_to_hex(int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255))
+        self._push_color(hex_color)
+
+    def _on_swatch(self, _btn: Gtk.Button, hex_color: str) -> None:
+        if not self.selected:
+            self._toast("Select a key first")
+            return
+        self._set_picker_hex(hex_color)
+        self._push_color(hex_color)
+
+    def _clear_color(self, *_a: object) -> None:
+        if not self.selected:
+            return
+        self._push_color(None)
+
+    def _push_color(self, hex_color: str | None) -> None:
+        if not self.selected:
+            return
+        row, col = self.selected
+        resp = self._rpc("set_key_color", row=row, col=col, color=hex_color)
+        if resp and resp.get("ok"):
+            lighting = (resp.get("lighting") or self.config.get("lighting") or {})
+            self.config.setdefault("lighting", {}).update(lighting)
+            if "keys" in lighting:
+                self.config["lighting"]["keys"] = lighting["keys"]
+            self.keys[(row, col)].apply_led_color(hex_color)
+            if int(self.effect.get_selected() or 0) != PER_KEY_EFFECT:
+                self._building = True
+                self.effect.set_selected(PER_KEY_EFFECT)
+                self._building = False
 
     def _active_keys(self) -> dict[str, Any]:
         profiles = self.config.get("profiles", {})
@@ -584,8 +709,10 @@ class C100Window(Adw.ApplicationWindow):
         if active in names:
             self.profile_drop.set_selected(names.index(active))
         keys = self._active_keys()
+        colors = (self.config.get("lighting") or {}).get("keys") or {}
         for (r, c), cap in self.keys.items():
             cap.apply_binding(keys.get(key_id(r, c)))
+            cap.apply_led_color(colors.get(key_id(r, c)))
         self._building = False
         if self.selected:
             self._select(*self.selected)
