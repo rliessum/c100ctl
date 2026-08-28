@@ -1,6 +1,6 @@
 """C100 Control — Linux host for the Keychron C100 8K macropad."""
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 VID = 0x3434
 PID = 0x042C

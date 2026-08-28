@@ -260,7 +260,7 @@ class C100Window(Adw.ApplicationWindow):
         outer.set_margin_start(16)
         outer.set_margin_end(8)
         self.hint = Gtk.Label(
-            label="Click a key. Ctrl+click adds, Shift+click fills a rectangle, drag to select a block. Color applies to every selected key.",
+            label="Click a key. Ctrl+click adds, Shift+click fills a rectangle, drag to select a block. App keys: tap to launch, double-tap to close.",
             wrap=True,
             xalign=0,
         )

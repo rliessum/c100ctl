@@ -22,6 +22,9 @@ from .via import PER_KEY_EFFECT, ViaClient, ViaError, parse_hex_color, rgb_to_hs
 
 log = logging.getLogger("c100ctl.daemon")
 
+# Wait this long after a tap to see if it's a double-tap (close) vs launch.
+DOUBLE_TAP_S = 0.30
+
 RGB_EFFECTS = [
     "None",
     "Solid Color",
@@ -71,6 +74,10 @@ class Engine:
         self._worker.start()
         self._led_map: list[list[int]] | None = None
         self._led_save_timer: threading.Timer | None = None
+        self._tap_lock = threading.Lock()
+        self._pending_tap: dict[tuple[int, int], threading.Timer] = {}
+        self._last_tap: dict[tuple[int, int], float] = {}
+        self._tap_seq: dict[tuple[int, int], int] = {}
 
     def start_ipc(self) -> None:
         self.ipc = IpcServer(self.handle)
@@ -78,6 +85,10 @@ class Engine:
 
     def stop(self) -> None:
         self._stop.set()
+        with self._tap_lock:
+            for timer in self._pending_tap.values():
+                timer.cancel()
+            self._pending_tap.clear()
         with self._jobs_cv:
             self._jobs_cv.notify_all()
         self._disconnect()
@@ -182,10 +193,48 @@ class Engine:
         binding = self.store.get_binding(row, col)
         if not binding:
             return
-        log.info("key %s,%s → %s", row, col, binding.get("type"))
+        kind = binding.get("type")
+        log.info("key %s,%s → %s", row, col, kind)
+        if kind in ("app", "command"):
+            self._handle_app_tap(row, col, dict(binding))
+            return
+        self._queue_job(dict(binding))
+
+    def _queue_job(self, binding: dict[str, Any]) -> None:
         with self._jobs_cv:
-            self._jobs.append(dict(binding))
+            self._jobs.append(binding)
             self._jobs_cv.notify()
+
+    def _handle_app_tap(self, row: int, col: int, binding: dict[str, Any]) -> None:
+        cell = (row, col)
+        now = time.monotonic()
+        with self._tap_lock:
+            pending = self._pending_tap.pop(cell, None)
+            if pending is not None:
+                pending.cancel()
+            last = self._last_tap.get(cell, 0.0)
+            double = last > 0 and (now - last) <= DOUBLE_TAP_S
+            self._last_tap[cell] = now
+            self._tap_seq[cell] = self._tap_seq.get(cell, 0) + 1
+            seq = self._tap_seq[cell]
+            if double:
+                log.info("double-tap %s,%s → close", row, col)
+                job = dict(binding)
+                job["_close"] = True
+                self._queue_job(job)
+                return
+
+            def fire() -> None:
+                with self._tap_lock:
+                    self._pending_tap.pop(cell, None)
+                    if self._tap_seq.get(cell) != seq:
+                        return
+                self._queue_job(dict(binding))
+
+            timer = threading.Timer(DOUBLE_TAP_S, fire)
+            timer.daemon = True
+            self._pending_tap[cell] = timer
+            timer.start()
 
     def _action_loop(self) -> None:
         while not self._stop.is_set():

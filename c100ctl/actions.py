@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -36,6 +39,9 @@ class Executor:
             self._kb = None
 
     def run(self, binding: dict[str, Any]) -> None:
+        if binding.get("_close"):
+            self.close_app(binding)
+            return
         kind = binding.get("type")
         if kind == "app":
             self.launch_app(binding)
@@ -152,6 +158,69 @@ class Executor:
         else:
             self._spawn([term, "-e", "bash", "-lc", command])
 
+    def close_app(self, binding: dict[str, Any]) -> None:
+        tokens, terminal = app_match_tokens(binding)
+        if not tokens:
+            raise ActionError("cannot close: no app identity")
+        clients = self._hypr_clients()
+        hits = [c for c in clients if window_matches(c, tokens, terminal)]
+        if not hits:
+            log.info("no open window matching %s", sorted(tokens))
+            return
+        closed = 0
+        for win in hits:
+            addr = str(win.get("address") or "")
+            if addr and self._hypr_close(addr):
+                closed += 1
+                continue
+            pid = int(win.get("pid") or 0)
+            if pid > 1:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    closed += 1
+                except OSError as e:
+                    log.warning("kill %s: %s", pid, e)
+        log.info("closed %s window(s) for %s", closed, sorted(tokens))
+
+    def _hypr_clients(self) -> list[dict[str, Any]]:
+        hyprctl = self._which("hyprctl")
+        if not hyprctl:
+            return []
+        try:
+            raw = subprocess.check_output(
+                [hyprctl, "clients", "-j"],
+                env=self.env,
+                text=True,
+                timeout=2,
+            )
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+            log.warning("hyprctl clients: %s", e)
+            return []
+
+    def _hypr_close(self, address: str) -> bool:
+        hyprctl = self._which("hyprctl")
+        if not hyprctl or not address:
+            return False
+        expr = f'hl.dsp.window.close({{ window = "address:{address}" }})'
+        try:
+            r = subprocess.run(
+                [hyprctl, "dispatch", expr],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.warning("hyprctl close: %s", e)
+            return False
+        out = (r.stdout or "") + (r.stderr or "")
+        if r.returncode == 0 and "error" not in out.lower():
+            return True
+        log.warning("hyprctl close %s: %s", address, out.strip())
+        return False
+
     def _omarchy_terminal_alias(self, command: str) -> bool:
         token = command.strip().split()[0] if command.strip() else ""
         if not token:
@@ -202,6 +271,73 @@ def _desktop_info(desktop_id: str) -> tuple[Path | None, str | None, bool]:
 
 def _desktop_exec(desktop_id: str) -> str | None:
     return _desktop_info(desktop_id)[1]
+
+
+_SKIP_TOKENS = {
+    "bash",
+    "sh",
+    "env",
+    "uwsm",
+    "flatpak",
+    "python",
+    "python3",
+    "perl",
+    "ruby",
+    "app",
+    "gtk-launch",
+    "gio",
+}
+
+
+def app_match_tokens(binding: dict[str, Any]) -> tuple[set[str], bool]:
+    """Window-class / title tokens used to find a launched app."""
+    tokens: set[str] = set()
+    terminal = False
+    desktop_id = (binding.get("desktop_id") or "").strip()
+    command = (binding.get("command") or "").strip()
+    if desktop_id:
+        ident = desktop_id if desktop_id.endswith(".desktop") else f"{desktop_id}.desktop"
+        tokens.add(Path(ident).stem.lower())
+        path, exec_line, terminal = _desktop_info(ident)
+        if path and path.is_file():
+            try:
+                for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if line.startswith("StartupWMClass="):
+                        tokens.add(line.split("=", 1)[1].strip().lower())
+            except OSError:
+                pass
+        if exec_line:
+            exe = exec_line.split()[0]
+            tokens.add(Path(exe).name.lower())
+            tokens.add(Path(exe).stem.lower())
+    if command:
+        exe = command.split()[0]
+        tokens.add(Path(exe).name.lower())
+        tokens.add(Path(exe).stem.lower())
+    tokens = {t for t in tokens if t and t not in _SKIP_TOKENS}
+    return tokens, terminal
+
+
+def window_matches(client: dict[str, Any], tokens: set[str], terminal: bool = False) -> bool:
+    cls = (client.get("class") or "").lower()
+    icls = (client.get("initialClass") or "").lower()
+    title = client.get("title") or ""
+    ititle = client.get("initialTitle") or ""
+    for tok in tokens:
+        t = tok.lower()
+        if not t:
+            continue
+        if cls == t or icls == t:
+            return True
+        if cls.endswith("." + t) or icls.endswith("." + t):
+            return True
+        if terminal and (_word_in(title, t) or _word_in(ititle, t)):
+            return True
+    return False
+
+
+def _word_in(text: str, token: str) -> bool:
+    return re.search(r"(?i)\b" + re.escape(token) + r"\b", text or "") is not None
 
 
 def list_desktop_apps() -> list[dict[str, str]]:
