@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from .session import graphical_env, hyprctl_available
+from .session import graphical_env
 from .uinput_kb import VirtualKeyboard
 
 log = logging.getLogger("c100ctl.actions")
@@ -61,20 +61,24 @@ class Executor:
         desktop_id = (binding.get("desktop_id") or "").strip()
         command = (binding.get("command") or "").strip()
         if desktop_id:
-            if desktop_id.endswith(".desktop"):
-                ident = desktop_id
-            else:
-                ident = f"{desktop_id}.desktop"
-            exec_line = _desktop_exec(ident)
-            if self._hypr_exec(exec_line or ident):
+            ident = desktop_id if desktop_id.endswith(".desktop") else f"{desktop_id}.desktop"
+            path, exec_line, terminal = _desktop_info(ident)
+            if self._uwsm_launch(path or ident, terminal=terminal):
                 return
-            if self._gtk_launch(ident):
+            if not terminal and self._gtk_launch(ident):
+                return
+            if path and self._gio_launch(path):
                 return
             if exec_line:
-                self.run_command(exec_line)
+                if terminal:
+                    self._launch_tui(exec_line)
+                else:
+                    self.run_command(exec_line)
                 return
             raise ActionError(f"could not launch {ident}")
         if command:
+            if self._omarchy_terminal_alias(command):
+                return
             self.run_command(command)
             return
         raise ActionError("app binding needs desktop_id or command")
@@ -83,49 +87,83 @@ class Executor:
         command = command.strip()
         if not command:
             raise ActionError("empty command")
-        subprocess.Popen(
-            ["bash", "-lc", command],
-            env=self.env,
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if self._omarchy_terminal_alias(command):
+            return
+        argv = ["bash", "-lc", command]
+        if not self._uwsm_launch(argv[0], extra=argv, terminal=False):
+            self._spawn(argv)
+
+    def _which(self, name: str) -> str | None:
+        return shutil.which(name, path=self.env.get("PATH"))
+
+    def _spawn(self, argv: list[str]) -> None:
+        log.info("spawn %s", argv)
+        subprocess.Popen(argv, env=self.env, start_new_session=True)
+
+    def _uwsm_launch(self, target: str | Path, terminal: bool = False, extra: list[str] | None = None) -> bool:
+        uwsm = self._which("uwsm")
+        if not uwsm:
+            return False
+        argv = [uwsm, "app"]
+        if terminal:
+            argv.append("-T")
+        if extra:
+            argv.append("--")
+            argv.extend(extra)
+        else:
+            argv.append(str(target))
+        try:
+            self._spawn(argv)
+            return True
+        except OSError as e:
+            log.warning("uwsm app failed: %s", e)
+            return False
 
     def _gtk_launch(self, desktop_id: str) -> bool:
-        gtk_launch = shutil.which("gtk-launch", path=self.env.get("PATH"))
+        gtk_launch = self._which("gtk-launch")
         if not gtk_launch:
             return False
         try:
-            subprocess.Popen(
-                [gtk_launch, desktop_id],
-                env=self.env,
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            self._spawn([gtk_launch, desktop_id])
             return True
         except OSError as e:
             log.warning("gtk-launch failed: %s", e)
             return False
 
-    def _hypr_exec(self, command: str) -> bool:
-        if not command or not hyprctl_available(self.env):
+    def _gio_launch(self, path: Path) -> bool:
+        gio = self._which("gio")
+        if not gio:
             return False
         try:
-            subprocess.Popen(
-                ["hyprctl", "dispatch", "exec", command],
-                env=self.env,
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            self._spawn([gio, "launch", str(path)])
             return True
         except OSError as e:
-            log.warning("hyprctl exec failed: %s", e)
+            log.warning("gio launch failed: %s", e)
             return False
 
+    def _launch_tui(self, command: str) -> None:
+        if self._uwsm_launch(command, terminal=True, extra=["bash", "-lc", command]):
+            return
+        term = self._which("xdg-terminal-exec") or self._which("kitty") or self._which("alacritty")
+        if not term:
+            raise ActionError(f"no terminal to launch {command!r}")
+        if term.endswith("xdg-terminal-exec"):
+            self._spawn([term, "bash", "-lc", command])
+        else:
+            self._spawn([term, "-e", "bash", "-lc", command])
 
-def _desktop_exec(desktop_id: str) -> str | None:
+    def _omarchy_terminal_alias(self, command: str) -> bool:
+        token = command.strip().split()[0] if command.strip() else ""
+        if not token:
+            return False
+        helper = self._which(f"omarchy-launch-terminal-{token}")
+        if helper:
+            self._spawn([helper, *command.strip().split()[1:]])
+            return True
+        return False
+
+
+def _desktop_paths(desktop_id: str) -> list[Path]:
     name = desktop_id if desktop_id.endswith(".desktop") else f"{desktop_id}.desktop"
     search = [
         Path.home() / ".local/share/applications" / name,
@@ -135,25 +173,35 @@ def _desktop_exec(desktop_id: str) -> str | None:
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
         search.insert(0, Path(xdg) / "applications" / name)
-    for path in search:
+    return search
+
+
+def _desktop_info(desktop_id: str) -> tuple[Path | None, str | None, bool]:
+    """Return (desktop path, Exec line, Terminal=true)."""
+    for path in _desktop_paths(desktop_id):
         if not path.is_file():
             continue
         exec_line = None
+        terminal = False
         try:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("Exec="):
+                if line.startswith("Exec=") and exec_line is None:
                     exec_line = line[5:].strip()
-                    break
+                elif line.startswith("Terminal="):
+                    terminal = line.split("=", 1)[1].strip().lower() in {"true", "1", "yes"}
         except OSError:
             continue
         if not exec_line:
             continue
-        # Desktop Exec field codes.
         for code in ("%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%k", "%v", "%m"):
             exec_line = exec_line.replace(code, "")
-        exec_line = exec_line.replace("%c", path.stem).replace("%i", "")
-        return exec_line.strip()
-    return None
+        exec_line = exec_line.replace("%c", path.stem).replace("%i", "").strip()
+        return path, exec_line, terminal
+    return None, None, False
+
+
+def _desktop_exec(desktop_id: str) -> str | None:
+    return _desktop_info(desktop_id)[1]
 
 
 def list_desktop_apps() -> list[dict[str, str]]:
