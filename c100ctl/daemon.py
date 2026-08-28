@@ -8,6 +8,7 @@ import os
 import signal
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +19,24 @@ from .device import find_c100, hidraw_exists
 from .identity import layer_with_identity, looks_factory
 from .ipc import IpcServer
 from .pad import PadGrab
-from .via import PER_KEY_EFFECT, ViaClient, ViaError, parse_hex_color, rgb_to_hsv255
+from .config import default_advanced, default_mix, parse_key_id
+from .via import (
+    MIX_RGB_EFFECT,
+    PER_KEY_EFFECT,
+    ViaClient,
+    ViaError,
+    parse_hex_color,
+    poll_div_from_hz,
+    poll_hz_from_div,
+    rgb_to_hsv255,
+)
 
 log = logging.getLogger("c100ctl.daemon")
 
 # Wait this long after a tap to see if it's a double-tap (close) vs launch.
 DOUBLE_TAP_S = 0.30
+HOLD_S = 0.40
+CHORD_S = 0.05
 
 RGB_EFFECTS = [
     "None",
@@ -59,7 +72,7 @@ class Engine:
         self.store = store or Store()
         self.via: ViaClient | None = None
         self.pad: PadGrab | None = None
-        self.executor = Executor(switch_profile=self._switch_profile)
+        self.executor = Executor(switch_profile=self._switch_profile, on_light=self._light_action)
         self.connected = False
         self.serial = ""
         self.protocol = 0
@@ -78,6 +91,17 @@ class Engine:
         self._pending_tap: dict[tuple[int, int], threading.Timer] = {}
         self._last_tap: dict[tuple[int, int], float] = {}
         self._tap_seq: dict[tuple[int, int], int] = {}
+        self._down: set[tuple[int, int]] = set()
+        self._hold_timer: dict[tuple[int, int], threading.Timer] = {}
+        self._chord_timer: dict[tuple[int, int], threading.Timer] = {}
+        self._consumed: set[tuple[int, int]] = set()
+        self._hold_fired: set[tuple[int, int]] = set()
+        self._momentary_from: str | None = None
+        self._idle_timer: threading.Timer | None = None
+        self._dimmed = False
+        self._pre_dim_brightness = 255
+        self.hardware: dict[str, Any] = {}
+        self._macro_hold: dict[tuple[int, int], threading.Event] = {}
 
     def start_ipc(self) -> None:
         self.ipc = IpcServer(self.handle)
@@ -89,6 +113,18 @@ class Engine:
             for timer in self._pending_tap.values():
                 timer.cancel()
             self._pending_tap.clear()
+            for timer in self._hold_timer.values():
+                timer.cancel()
+            self._hold_timer.clear()
+            for timer in self._chord_timer.values():
+                timer.cancel()
+            self._chord_timer.clear()
+            for stop in self._macro_hold.values():
+                stop.set()
+            self._macro_hold.clear()
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         with self._jobs_cv:
             self._jobs_cv.notify_all()
         self._disconnect()
@@ -146,6 +182,12 @@ class Engine:
         except Exception:
             log.exception("lighting apply failed")
         try:
+            self.hardware = self._probe_hardware()
+        except Exception:
+            log.exception("hardware probe")
+            self.hardware = {}
+        self._arm_idle()
+        try:
             pad = PadGrab(found.evdev_paths, via=via, on_key=self._on_key)
             pad.start()
             self.pad = pad
@@ -181,24 +223,175 @@ class Engine:
             except Exception:
                 pass
             self.via = None
+        self.hardware = {}
         if was:
             self._broadcast({"event": "disconnected"})
 
     def _on_key(self, row: int, col: int, pressed: bool) -> None:
         self._broadcast({"event": "key", "row": row, "col": col, "pressed": pressed})
-        if not pressed:
-            return
+        self._bump_idle()
+        cell = (row, col)
+        if pressed:
+            self._down.add(cell)
+        else:
+            self._down.discard(cell)
         if (row, col) in LOCKED_KEYS:
             return
-        binding = self.store.get_binding(row, col)
+        if pressed:
+            self._on_press(cell)
+        else:
+            self._on_release(cell)
+
+    def _on_press(self, cell: tuple[int, int]) -> None:
+        chord = self._matching_chord()
+        if chord and cell in chord[0]:
+            for other in chord[0]:
+                self._cancel_cell(other)
+                self._consumed.add(other)
+            log.info("chord %s", sorted(chord[0]))
+            self._dispatch_binding(dict(chord[1]))
+            return
+        if self._cell_in_any_chord(cell):
+            timer = threading.Timer(CHORD_S, lambda: self._arm_key(cell))
+            timer.daemon = True
+            with self._tap_lock:
+                old = self._chord_timer.pop(cell, None)
+                if old:
+                    old.cancel()
+                self._chord_timer[cell] = timer
+            timer.start()
+            return
+        self._arm_key(cell)
+
+    def _on_release(self, cell: tuple[int, int]) -> None:
+        with self._tap_lock:
+            hold = self._hold_timer.pop(cell, None)
+            chord = self._chord_timer.pop(cell, None)
+            stop = self._macro_hold.pop(cell, None)
+        if hold:
+            hold.cancel()
+        if chord:
+            chord.cancel()
+        if stop:
+            stop.set()
+        if cell in self._consumed:
+            self._consumed.discard(cell)
+            return
+        if cell in self._hold_fired:
+            self._hold_fired.discard(cell)
+            if self._momentary_from:
+                name = self._momentary_from
+                self._momentary_from = None
+                self._switch_profile(name)
+            return
+        binding = self.store.get_binding(*cell)
+        if binding and isinstance(binding.get("hold"), dict):
+            self._dispatch_binding(dict(binding))
+
+    def _arm_key(self, cell: tuple[int, int]) -> None:
+        with self._tap_lock:
+            pending = self._chord_timer.pop(cell, None)
+            if pending:
+                pending.cancel()
+        if cell not in self._down or cell in self._consumed:
+            return
+        binding = self.store.get_binding(*cell)
         if not binding:
             return
+        hold = binding.get("hold") if isinstance(binding.get("hold"), dict) else None
+        if hold:
+            timer = threading.Timer(HOLD_S, lambda: self._fire_hold(cell, dict(hold)))
+            timer.daemon = True
+            with self._tap_lock:
+                old = self._hold_timer.pop(cell, None)
+                if old:
+                    old.cancel()
+                self._hold_timer[cell] = timer
+            timer.start()
+            return
+        self._dispatch_binding(dict(binding), cell=cell)
+
+    def _fire_hold(self, cell: tuple[int, int], hold: dict[str, Any]) -> None:
+        with self._tap_lock:
+            self._hold_timer.pop(cell, None)
+        if cell not in self._down or cell in self._consumed:
+            return
+        self._hold_fired.add(cell)
+        if hold.get("type") == "profile" and hold.get("momentary"):
+            self._momentary_from = self.store.active_profile_name()
+        log.info("hold %s,%s → %s", cell[0], cell[1], hold.get("type"))
+        self._dispatch_binding(dict(hold), cell=cell)
+
+    def _dispatch_binding(self, binding: dict[str, Any], cell: tuple[int, int] | None = None) -> None:
         kind = binding.get("type")
-        log.info("key %s,%s → %s", row, col, kind)
+        log.info("fire %s", kind)
         if kind in ("app", "command"):
-            self._handle_app_tap(row, col, dict(binding))
+            if cell is None:
+                self._queue_job(dict(binding))
+                return
+            self._handle_app_tap(cell[0], cell[1], dict(binding))
+            return
+        if kind == "macro" and str(binding.get("repeat") or "") in {"hold", "while_held"} and cell:
+            self._start_macro_hold(cell, dict(binding))
+            return
+        repeat = binding.get("repeat")
+        if kind == "macro" and isinstance(repeat, int) and repeat > 1:
+            job = dict(binding)
+            job["_repeat"] = int(repeat)
+            self._queue_job(job)
             return
         self._queue_job(dict(binding))
+
+    def _start_macro_hold(self, cell: tuple[int, int], binding: dict[str, Any]) -> None:
+        stop = threading.Event()
+        with self._tap_lock:
+            old = self._macro_hold.pop(cell, None)
+            if old:
+                old.set()
+            self._macro_hold[cell] = stop
+
+        def loop() -> None:
+            while not stop.is_set() and not self._stop.is_set():
+                try:
+                    self.executor.run(binding)
+                except Exception:
+                    log.exception("macro hold")
+                    return
+                if stop.wait(0.04):
+                    return
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def _cancel_cell(self, cell: tuple[int, int]) -> None:
+        with self._tap_lock:
+            for bucket in (self._pending_tap, self._hold_timer, self._chord_timer):
+                timer = bucket.pop(cell, None)
+                if timer:
+                    timer.cancel()
+
+    def _chords(self) -> list[tuple[set[tuple[int, int]], dict[str, Any]]]:
+        out: list[tuple[set[tuple[int, int]], dict[str, Any]]] = []
+        for chord in self.store.data.get("chords") or []:
+            cells: set[tuple[int, int]] = set()
+            for kid in chord.get("keys") or []:
+                try:
+                    cells.add(parse_key_id(str(kid)))
+                except ValueError:
+                    cells = set()
+                    break
+            binding = chord.get("binding")
+            if len(cells) >= 2 and isinstance(binding, dict):
+                out.append((cells, binding))
+        return out
+
+    def _matching_chord(self) -> tuple[set[tuple[int, int]], dict[str, Any]] | None:
+        for cells, binding in self._chords():
+            if cells <= self._down:
+                return cells, binding
+        return None
+
+    def _cell_in_any_chord(self, cell: tuple[int, int]) -> bool:
+        return any(cell in cells for cells, _b in self._chords())
 
     def _queue_job(self, binding: dict[str, Any]) -> None:
         with self._jobs_cv:
@@ -245,7 +438,9 @@ class Engine:
                     return
                 binding = self._jobs.pop(0)
             try:
-                self.executor.run(binding)
+                times = int(binding.get("_repeat") or 1)
+                for _ in range(max(1, times)):
+                    self.executor.run(binding)
             except ActionError as e:
                 log.warning("action failed: %s", e)
                 self._broadcast({"event": "error", "error": str(e)})
@@ -254,26 +449,174 @@ class Engine:
 
     def _switch_profile(self, name: str) -> None:
         self.store.set_profile(name)
+        profile = self.store.profile(name)
+        lighting = profile.get("lighting")
+        if isinstance(lighting, dict) and lighting:
+            store_l = self.store.data.setdefault("lighting", {})
+            if isinstance(lighting.get("keys"), dict):
+                store_l["keys"] = dict(lighting["keys"])
+            for field in ("brightness", "effect", "speed", "color", "per_key_type", "mix"):
+                if field in lighting:
+                    store_l[field] = lighting[field]
+            self.store.save()
+            if self.via and self.connected:
+                try:
+                    self._apply_lighting()
+                except Exception:
+                    log.exception("profile lighting")
         self._broadcast({"event": "profile", "name": name, "config": self.store.snapshot()})
+
+    def _apply_mix(self, mix: dict[str, Any]) -> None:
+        if not self.via:
+            return
+        regions = mix.get("regions") or [0] * 100
+        if len(regions) < 100:
+            regions = list(regions) + [0] * (100 - len(regions))
+        self.via.set_mix_regions(regions[:100])
+        slots = mix.get("slots") or default_mix()["slots"]
+        for layer, layer_slots in enumerate(slots[:2]):
+            self.via.set_mix_slots(layer, layer_slots)
+        self.via.save_leds()
+
+    def _apply_advanced(self) -> None:
+        if not self.via:
+            return
+        adv = self.store.data.setdefault("advanced", default_advanced())
+        try:
+            self.via.set_poll_div(poll_div_from_hz(int(adv.get("poll_hz") or 8000)))
+        except ViaError:
+            log.warning("poll rate not supported")
+        try:
+            self.via.set_debounce(int(adv.get("debounce_type") or 4), int(adv.get("debounce_ms") or 5))
+        except ViaError:
+            log.warning("debounce not supported")
+        try:
+            self.via.set_nkro(bool(adv.get("nkro", True)))
+        except ViaError:
+            log.warning("nkro not supported")
+        self._arm_idle()
+
+    def _light_action(self, action: str) -> None:
+        lighting = self.store.data.setdefault("lighting", {})
+        action = action.strip().lower()
+        if action in {"next", "prev"}:
+            cur = int(lighting.get("effect") or 0)
+            nxt = (cur + (1 if action == "next" else -1)) % len(RGB_EFFECTS)
+            lighting["effect"] = nxt
+        elif action == "brighter":
+            lighting["brightness"] = min(255, int(lighting.get("brightness") or 0) + 16)
+        elif action == "dimmer":
+            lighting["brightness"] = max(0, int(lighting.get("brightness") or 0) - 16)
+        elif action == "toggle":
+            cur = int(lighting.get("brightness") or 0)
+            if cur <= 0:
+                lighting["brightness"] = int(lighting.get("_prev_brightness") or 255)
+            else:
+                lighting["_prev_brightness"] = cur
+                lighting["brightness"] = 0
+        elif action == "perkey":
+            lighting["effect"] = PER_KEY_EFFECT
+        elif action == "mix":
+            lighting["effect"] = MIX_RGB_EFFECT
+        else:
+            raise ActionError(f"unknown light action {action!r}")
+        self.store.save()
+        if self.via and self.connected:
+            self._apply_lighting()
+        self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
+
+    def _bump_idle(self) -> None:
+        if self._dimmed and self.via and self.connected:
+            try:
+                self.via.set_brightness(self._pre_dim_brightness, save=False)
+            except ViaError:
+                pass
+            self._dimmed = False
+        self._arm_idle()
+
+    def _arm_idle(self) -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+        seconds = int((self.store.data.get("advanced") or {}).get("idle_dim_s") or 0)
+        if seconds <= 0:
+            return
+
+        def dim() -> None:
+            if not self.via or not self.connected or self._dimmed:
+                return
+            lighting = self.store.data.get("lighting") or {}
+            self._pre_dim_brightness = int(lighting.get("brightness") or 255)
+            try:
+                self.via.set_brightness(0, save=False)
+                self._dimmed = True
+            except ViaError:
+                pass
+
+        self._idle_timer = threading.Timer(seconds, dim)
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _probe_hardware(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if not self.via:
+            return out
+        try:
+            out["firmware"] = self.via.firmware_string()
+        except ViaError:
+            out["firmware"] = ""
+        try:
+            div = self.via.get_poll_div()
+            out["poll_hz"] = poll_hz_from_div(div) if div is not None else None
+            out["poll_supported"] = div is not None
+        except ViaError:
+            out["poll_supported"] = False
+        try:
+            deb = self.via.get_debounce()
+            out["debounce"] = {"type": deb[0], "ms": deb[1]} if deb else None
+            out["debounce_supported"] = deb is not None
+        except ViaError:
+            out["debounce_supported"] = False
+        try:
+            nkro = self.via.get_nkro()
+            out["nkro"] = {"on": nkro[0], "can_toggle": nkro[1]} if nkro else None
+            out["nkro_supported"] = nkro is not None
+        except ViaError:
+            out["nkro_supported"] = False
+        return out
 
     def _apply_lighting(self) -> None:
         if not self.via:
             return
-        lighting = self.store.data.get("lighting", {})
+        lighting = self.store.data.setdefault("lighting", {})
         colors = lighting.get("keys") or {}
-        if colors:
-            lighting["effect"] = PER_KEY_EFFECT
+        effect = int(lighting.get("effect", 1))
+        if colors and effect not in (PER_KEY_EFFECT, MIX_RGB_EFFECT):
+            effect = PER_KEY_EFFECT
+            lighting["effect"] = effect
         if "brightness" in lighting:
             self.via.set_brightness(int(lighting["brightness"]), save=True)
-        if "effect" in lighting:
-            effect = int(lighting["effect"])
-            self.via.set_effect(effect, save=True)
-            if effect == PER_KEY_EFFECT:
-                self.via.enable_per_key(save=False)
         if "speed" in lighting:
             self.via.set_speed(int(lighting["speed"]), save=True)
-        if colors:
-            self._write_all_key_colors(dict(colors), save=True)
+        color = lighting.get("color")
+        if color:
+            try:
+                h, s, _v = rgb_to_hsv255(*parse_hex_color(str(color)))
+                self.via.set_color_hsv(h, s, save=True)
+            except ValueError:
+                pass
+        self.via.set_effect(effect, save=True)
+        if effect == PER_KEY_EFFECT:
+            type_id = int(lighting.get("per_key_type") or 0)
+            self.via.enable_per_key(save=False)
+            self.via.set_per_key_type(type_id)
+            if colors:
+                self._write_all_key_colors(dict(colors), save=True)
+            else:
+                self.via.save_leds()
+        elif effect == MIX_RGB_EFFECT:
+            self._apply_mix(lighting.get("mix") or default_mix())
+        self._dimmed = False
 
     def _led_index(self, row: int, col: int) -> int:
         if self._led_map and 0 <= row < len(self._led_map) and 0 <= col < len(self._led_map[row]):
@@ -408,7 +751,9 @@ class Engine:
             "provisioned": bool(self.store.data.get("provisioned")),
             "profile": self.store.active_profile_name(),
             "lighting": lighting,
+            "advanced": dict(self.store.data.get("advanced") or default_advanced()),
             "effects": RGB_EFFECTS,
+            "hardware": dict(self.hardware),
             "info": self.info,
         }
 
@@ -444,11 +789,77 @@ class Engine:
                 lighting["effect"] = int(req["effect"])
             if "speed" in req:
                 lighting["speed"] = int(req["speed"])
+            if "color" in req and req["color"]:
+                parse_hex_color(str(req["color"]))
+                color = str(req["color"])
+                lighting["color"] = color if color.startswith("#") else f"#{color.lstrip('#')}"
+            if "per_key_type" in req:
+                lighting["per_key_type"] = max(0, min(4, int(req["per_key_type"])))
             self.store.save()
             if self.via and self.connected:
                 self._apply_lighting()
             self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
             return {"ok": True, "lighting": lighting}
+        if op == "set_mix":
+            lighting = self.store.data.setdefault("lighting", {})
+            mix = lighting.setdefault("mix", default_mix())
+            if "regions" in req and isinstance(req["regions"], list):
+                regs = [1 if int(x) else 0 for x in req["regions"][:100]]
+                mix["regions"] = regs + [0] * (100 - len(regs))
+            if "slots" in req and isinstance(req["slots"], list):
+                mix["slots"] = req["slots"]
+            lighting["effect"] = MIX_RGB_EFFECT
+            self.store.save()
+            if self.via and self.connected:
+                self.via.set_effect(MIX_RGB_EFFECT, save=True)
+                self._apply_mix(mix)
+            self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
+            return {"ok": True, "lighting": lighting}
+        if op == "clear_key_colors":
+            lighting = self.store.data.setdefault("lighting", {})
+            lighting["keys"] = {}
+            self.store.save()
+            if self.via and self.connected:
+                black = [(0, 0, 0)] * 100
+                self.via.write_all_rgb(black, save=True)
+            self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
+            return {"ok": True, "lighting": lighting}
+        if op == "save_profile_lighting":
+            name = req.get("name") or self.store.active_profile_name()
+            profile = self.store.profile(name)
+            profile["lighting"] = deepcopy(self.store.data.get("lighting") or {})
+            self.store.save()
+            return {"ok": True, "config": self.store.snapshot()}
+        if op == "set_advanced":
+            adv = self.store.data.setdefault("advanced", default_advanced())
+            for key in ("poll_hz", "debounce_type", "debounce_ms", "idle_dim_s"):
+                if key in req:
+                    adv[key] = int(req[key])
+            if "nkro" in req:
+                adv["nkro"] = bool(req["nkro"])
+            self.store.save()
+            if self.via and self.connected:
+                self._apply_advanced()
+                try:
+                    self.hardware = self._probe_hardware()
+                except Exception:
+                    pass
+            self._broadcast({"event": "advanced", "advanced": adv, "config": self.store.snapshot()})
+            return {"ok": True, "advanced": adv}
+        if op == "set_chords":
+            self.store.set_chords(list(req.get("chords") or []))
+            self._broadcast({"event": "config", "config": self.store.snapshot()})
+            return {"ok": True, "chords": self.store.data.get("chords")}
+        if op == "import_config":
+            payload = req.get("config")
+            if not isinstance(payload, dict):
+                return {"ok": False, "error": "config object required"}
+            self.store.replace_config(payload)
+            if self.via and self.connected:
+                self._apply_lighting()
+                self._apply_advanced()
+            self._broadcast({"event": "config", "config": self.store.snapshot()})
+            return {"ok": True, "config": self.store.snapshot()}
         if op == "set_key_color":
             color = req.get("color")
             if color == "" or color == "off":

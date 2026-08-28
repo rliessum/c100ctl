@@ -11,12 +11,23 @@ from .keycodes import Combo, MacroStep, chars_to_taps, parse_combo, parse_macro
 
 _KEY_CODES: list[int] = []
 for name, value in ecodes.ecodes.items():
-    if not name.startswith("KEY_"):
+    if not (name.startswith("KEY_") or name.startswith("BTN_")):
         continue
     if isinstance(value, int):
         _KEY_CODES.append(value)
 
-_CAP = {ecodes.EV_KEY: sorted(set(_KEY_CODES))}
+_CAP = {
+    ecodes.EV_KEY: sorted(set(_KEY_CODES)),
+    ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
+}
+
+_MOUSE_BTN = {
+    "left": "BTN_LEFT",
+    "right": "BTN_RIGHT",
+    "middle": "BTN_MIDDLE",
+    "back": "BTN_SIDE",
+    "forward": "BTN_EXTRA",
+}
 
 
 def _code(name: str) -> int:
@@ -86,3 +97,21 @@ class VirtualKeyboard:
 
     def play_macro_text(self, text: str) -> None:
         self.play_macro(parse_macro(text))
+
+    def tap_named(self, name: str, hold_s: float = 0.018) -> None:
+        self.tap(name, hold_s=hold_s)
+
+    def click_mouse(self, button: str, hold_s: float = 0.03) -> None:
+        key = _MOUSE_BTN.get(button)
+        if not key:
+            raise ValueError(f"unknown mouse button {button!r}")
+        code = getattr(ecodes, key)
+        self._ui.write(ecodes.EV_KEY, code, 1)
+        self._ui.syn()
+        time.sleep(hold_s)
+        self._ui.write(ecodes.EV_KEY, code, 0)
+        self._ui.syn()
+
+    def scroll(self, amount: int) -> None:
+        self._ui.write(ecodes.EV_REL, ecodes.REL_WHEEL, int(amount))
+        self._ui.syn()

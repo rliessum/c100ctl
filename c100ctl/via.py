@@ -52,8 +52,31 @@ KC_RGB_SET_EFFECT = 8
 KC_RGB_GET_COLOR = 9
 KC_RGB_SET_COLOR = 10
 PER_KEY_EFFECT = 23
+MIX_RGB_EFFECT = 24
 PER_KEY_RGB_SOLID = 0
 LEDS_PER_PACKET = 9
+MIX_REGION_CHUNK = 28
+MIX_EFFECT_CHUNK = 3
+MIX_EFFECT_BYTES = 8
+MIX_LAYERS = 2
+MIX_SLOTS = 5
+
+KC_FIRMWARE_VERSION = 0xA1
+KC_GET_SUPPORT_FEATURE = 0xA2
+KC_MISC = 0xA7
+MISC_DEBOUNCE_GET = 5
+MISC_DEBOUNCE_SET = 6
+MISC_REPORT_RATE_GET = 0x0D
+MISC_REPORT_RATE_SET = 0x0E
+MISC_NKRO_GET = 0x12
+MISC_NKRO_SET = 0x13
+KC_RGB_MIX_INFO = 11
+KC_RGB_MIX_GET_REGIONS = 12
+KC_RGB_MIX_SET_REGIONS = 13
+KC_RGB_MIX_GET_EFFECTS = 14
+KC_RGB_MIX_SET_EFFECTS = 15
+
+POLL_HZ = (8000, 4000, 2000, 1000, 500, 250, 125)
 
 BUFFER_CHUNK = 28
 
@@ -267,6 +290,130 @@ class ViaClient:
             i += LEDS_PER_PACKET
         if save:
             self.save_leds()
+
+    def set_per_key_type(self, type_id: int) -> None:
+        self._cmd([KC_RGB, KC_RGB_SET_EFFECT, max(0, min(4, type_id))])
+
+    def get_per_key_type(self) -> int:
+        r = self._cmd([KC_RGB, KC_RGB_GET_EFFECT])
+        return int(r[3])
+
+    def firmware_string(self) -> str:
+        r = self._cmd([KC_FIRMWARE_VERSION])
+        return r[1:].split(b"\x00", 1)[0].decode("ascii", "replace").strip()
+
+    def support_features(self) -> int:
+        r = self._cmd([KC_GET_SUPPORT_FEATURE])
+        return int(r[2]) | (int(r[3]) << 8)
+
+    def get_poll_div(self) -> int | None:
+        r = self._cmd([KC_MISC, MISC_REPORT_RATE_GET])
+        if r[0] == 0xFF or r[2] not in (0, 1):
+            return None
+        return int(r[3])
+
+    def set_poll_div(self, div: int) -> bool:
+        r = self._cmd([KC_MISC, MISC_REPORT_RATE_SET, max(0, min(6, div))])
+        return r[0] != 0xFF and r[2] == 0
+
+    def get_debounce(self) -> tuple[int, int] | None:
+        r = self._cmd([KC_MISC, MISC_DEBOUNCE_GET, 255])
+        if r[0] == 0xFF:
+            return None
+        return int(r[4]), int(r[5])
+
+    def set_debounce(self, type_id: int, ms: int) -> bool:
+        r = self._cmd([KC_MISC, MISC_DEBOUNCE_SET, type_id & 0xFF, max(0, min(255, ms))])
+        return r[0] != 0xFF and r[2] == 0
+
+    def get_nkro(self) -> tuple[bool, bool] | None:
+        r = self._cmd([KC_MISC, MISC_NKRO_GET])
+        if r[0] == 0xFF:
+            return None
+        flags = int(r[3])
+        return bool(flags & 1), bool(flags & 2)
+
+    def set_nkro(self, enabled: bool) -> bool:
+        r = self._cmd([KC_MISC, MISC_NKRO_SET, 1 if enabled else 0])
+        return r[0] != 0xFF and r[2] == 0
+
+    def mix_info(self) -> tuple[int, int]:
+        r = self._cmd([KC_RGB, KC_RGB_MIX_INFO])
+        return int(r[3] or MIX_LAYERS), int(r[4] or MIX_SLOTS)
+
+    def get_mix_regions(self, count: int = 100) -> list[int]:
+        out: list[int] = []
+        i = 0
+        while i < count:
+            n = min(MIX_REGION_CHUNK, count - i)
+            r = self._cmd([KC_RGB, KC_RGB_MIX_GET_REGIONS, i, n])
+            out.extend(int(x) for x in r[3 : 3 + n])
+            i += n
+        return out[:count]
+
+    def set_mix_regions(self, regions: Sequence[int]) -> None:
+        i = 0
+        vals = [max(0, min(1, int(x))) for x in regions]
+        while i < len(vals):
+            chunk = vals[i : i + MIX_REGION_CHUNK]
+            self._cmd([KC_RGB, KC_RGB_MIX_SET_REGIONS, i, len(chunk), *chunk])
+            i += len(chunk)
+
+    def get_mix_slots(self, layer: int, slots: int = MIX_SLOTS) -> list[dict[str, int]]:
+        out: list[dict[str, int]] = []
+        start = 0
+        while start < slots:
+            n = min(MIX_EFFECT_CHUNK, slots - start)
+            r = self._cmd([KC_RGB, KC_RGB_MIX_GET_EFFECTS, layer & 0xFF, start, n])
+            for i in range(n):
+                o = 3 + i * MIX_EFFECT_BYTES
+                time_ms = int.from_bytes(bytes(r[o + 4 : o + 8]), "little")
+                out.append(
+                    {
+                        "effect": int(r[o]),
+                        "hue": int(r[o + 1]),
+                        "sat": int(r[o + 2]),
+                        "speed": int(r[o + 3]),
+                        "time_ms": time_ms,
+                    }
+                )
+            start += n
+        return out
+
+    def set_mix_slots(self, layer: int, slots: Sequence[dict[str, int]]) -> None:
+        packed: list[int] = []
+        for slot in list(slots)[:MIX_SLOTS]:
+            time_ms = max(0, int(slot.get("time_ms", 5000)))
+            packed.extend(
+                [
+                    int(slot.get("effect", 0)) & 0xFF,
+                    int(slot.get("hue", 0)) & 0xFF,
+                    int(slot.get("sat", 255)) & 0xFF,
+                    int(slot.get("speed", 127)) & 0xFF,
+                    *time_ms.to_bytes(4, "little"),
+                ]
+            )
+        while len(packed) < MIX_SLOTS * MIX_EFFECT_BYTES:
+            packed.extend([0, 0, 255, 127, * (5000).to_bytes(4, "little")])
+        start = 0
+        while start < MIX_SLOTS:
+            n = min(MIX_EFFECT_CHUNK, MIX_SLOTS - start)
+            chunk = packed[start * MIX_EFFECT_BYTES : (start + n) * MIX_EFFECT_BYTES]
+            self._cmd([KC_RGB, KC_RGB_MIX_SET_EFFECTS, layer & 0xFF, start, n, *chunk])
+            start += n
+
+
+def poll_hz_from_div(div: int) -> int:
+    div = max(0, min(6, int(div)))
+    return 8000 // (1 << div)
+
+
+def poll_div_from_hz(hz: int) -> int:
+    best = 0
+    for i, value in enumerate(POLL_HZ):
+        if abs(value - hz) < abs(POLL_HZ[best] - hz):
+            best = i
+    return best
 
 
 def rgb_to_hsv255(r: int, g: int, b: int) -> tuple[int, int, int]:

@@ -1,6 +1,6 @@
 import unittest
 
-from c100ctl.via import hsv255_to_rgb, parse_hex_color, rgb_to_hex, rgb_to_hsv255
+from c100ctl.via import hsv255_to_rgb, parse_hex_color, poll_div_from_hz, poll_hz_from_div, rgb_to_hex, rgb_to_hsv255
 
 
 class ColorTest(unittest.TestCase):
@@ -28,6 +28,12 @@ class ColorTest(unittest.TestCase):
     def test_teal_not_pulled_into_green(self):
         h, s, v = rgb_to_hsv255(0x00, 0xC7, 0xBE)
         self.assertGreater(h, 115)
+
+    def test_poll_div(self):
+        self.assertEqual(poll_hz_from_div(0), 8000)
+        self.assertEqual(poll_hz_from_div(3), 1000)
+        self.assertEqual(poll_div_from_hz(8000), 0)
+        self.assertEqual(poll_div_from_hz(1000), 3)
 
     def test_rect_cells(self):
         r0, r1 = min(1, 3), max(1, 3)

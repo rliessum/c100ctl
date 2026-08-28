@@ -27,4 +27,13 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(key_id(9, 9), "9,9")
 
     def test_default_version(self):
-        self.assertEqual(default_config()["version"], 1)
+        self.assertEqual(default_config()["version"], 2)
+
+    def test_url_binding(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "config.json")
+            store.set_binding(0, 1, {"type": "url", "url": "https://omarchy.org", "label": "web"})
+            self.assertEqual(store.get_binding(0, 1)["url"], "https://omarchy.org")

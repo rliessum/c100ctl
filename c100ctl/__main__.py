@@ -6,6 +6,7 @@ import sys
 def main() -> int:
     from .cli import (
         build_parser,
+        cmd_advanced,
         cmd_bind,
         cmd_light,
         cmd_list,
@@ -43,6 +44,8 @@ def main() -> int:
         return cmd_light(args)
     if cmd == "profile":
         return cmd_profile(args)
+    if cmd == "advanced":
+        return cmd_advanced(args)
     if cmd == "gui":
         from .gui import main as gui_main
 

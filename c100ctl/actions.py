@@ -1,4 +1,4 @@
-"""Run a binding: app, command, combo, macro, text, profile."""
+"""Run a binding: app, command, combo, macro, text, profile, url, media, mouse, light."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
+from .catalog import media_evdev
 from .session import graphical_env
 from .uinput_kb import VirtualKeyboard
 
@@ -23,10 +24,15 @@ class ActionError(RuntimeError):
 
 
 class Executor:
-    def __init__(self, switch_profile: Callable[[str], None] | None = None):
+    def __init__(
+        self,
+        switch_profile: Callable[[str], None] | None = None,
+        on_light: Callable[[str], None] | None = None,
+    ):
         self.env = graphical_env()
         self._kb: VirtualKeyboard | None = None
         self.switch_profile = switch_profile
+        self.on_light = on_light
 
     def keyboard(self) -> VirtualKeyboard:
         if self._kb is None:
@@ -60,8 +66,52 @@ class Executor:
             if not self.switch_profile:
                 raise ActionError("profile switching is not available")
             self.switch_profile(name)
+        elif kind == "url":
+            self.open_url(binding.get("url") or binding.get("command") or "")
+        elif kind == "media":
+            self.media(binding.get("media") or "")
+        elif kind == "mouse":
+            self.mouse(binding.get("mouse") or "")
+        elif kind == "light":
+            action = (binding.get("light") or "").strip()
+            if not action:
+                raise ActionError("light binding missing action")
+            if not self.on_light:
+                raise ActionError("lighting control is not available")
+            self.on_light(action)
         else:
             raise ActionError(f"unknown binding type {kind!r}")
+
+    def open_url(self, url: str) -> None:
+        url = url.strip()
+        if not url:
+            raise ActionError("empty url")
+        if "://" not in url:
+            url = "https://" + url
+        opener = self._which("xdg-open")
+        if not opener:
+            raise ActionError("xdg-open is not available")
+        if not self._uwsm_launch(opener, extra=[opener, url]):
+            self._spawn([opener, url])
+
+    def media(self, name: str) -> None:
+        key = media_evdev(name.strip().lower())
+        if not key:
+            raise ActionError(f"unknown media action {name!r}")
+        self.keyboard().tap_named(key)
+
+    def mouse(self, name: str) -> None:
+        name = name.strip().lower()
+        if name in {"wheelup", "scrollup"}:
+            self.keyboard().scroll(1)
+            return
+        if name in {"wheeldown", "scrolldown"}:
+            self.keyboard().scroll(-1)
+            return
+        try:
+            self.keyboard().click_mouse(name)
+        except ValueError as e:
+            raise ActionError(str(e)) from e
 
     def launch_app(self, binding: dict[str, Any]) -> None:
         desktop_id = (binding.get("desktop_id") or "").strip()

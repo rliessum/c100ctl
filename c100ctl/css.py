@@ -59,6 +59,18 @@ window.main {
 .keycap.bound-macro { border-bottom: 3px solid #e56b86; }
 .keycap.bound-text { border-bottom: 3px solid #b79be8; }
 .keycap.bound-profile { border-bottom: 3px solid #d48b5a; }
+.keycap.bound-url { border-bottom: 3px solid #7aa2f7; }
+.keycap.bound-media { border-bottom: 3px solid #c0a0ff; }
+.keycap.bound-mouse { border-bottom: 3px solid #9ece6a; }
+.keycap.bound-light { border-bottom: 3px solid #e0af68; }
+
+.zone-0 { outline: 2px solid #7aa2f7; outline-offset: 1px; }
+.zone-1 { outline: 2px solid #e0af68; outline-offset: 1px; }
+
+.test-hit {
+  background: #f0a05a !important;
+  color: #1b140e !important;
+}
 
 .key-label {
   font-size: 12px;
