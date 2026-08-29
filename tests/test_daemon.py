@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from c100ctl.config import Store
-from c100ctl.daemon import CHORD_S, DOUBLE_TAP_S, Engine, HOLD_S
-from tests.fakes import FakeVia, RecExecutor
+from c100ctl.daemon import Engine
+from tests.fakes import FakeVia, RecExecutor, RecIpc
 
 
 class DaemonIpcTest(unittest.TestCase):
@@ -17,6 +17,7 @@ class DaemonIpcTest(unittest.TestCase):
         self.exec = RecExecutor(switch=self.eng._switch_profile)
         self.eng.executor = self.exec
         self.eng.via = FakeVia()
+        self.eng.ipc = RecIpc()
         self.eng.connected = True
 
     def tearDown(self):
@@ -451,3 +452,119 @@ class DaemonIpcTest(unittest.TestCase):
         self.eng.via.calls.clear()
         self.eng._on_key(1, 1, True)
         self.assertFalse(any(c[0] == "set_brightness" and c[1] == 80 for c in self.eng.via.calls))
+
+
+class DaemonProfilePersistTest(unittest.TestCase):
+    """save_profile and the config broadcasts that follow profile edits."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "config.json")
+        self.eng = Engine(store=self.store)
+        self.eng.executor = RecExecutor(switch=self.eng._switch_profile)
+        self.eng.via = FakeVia()
+        self.eng.ipc = RecIpc()
+        self.eng.connected = True
+
+    def tearDown(self):
+        self.eng.stop()
+        self.tmp.cleanup()
+
+    def test_ensure_profile_broadcasts_config(self):
+        resp = self.eng.handle({"op": "ensure_profile", "name": "gaming", "clone_from": "__current__"})
+        self.assertTrue(resp["ok"])
+        sent = self.eng.ipc.last("config")
+        self.assertIsNotNone(sent)
+        self.assertIn("gaming", sent["config"]["profiles"])
+
+    def test_delete_profile_broadcasts_config(self):
+        self.store.ensure_profile("temp")
+        resp = self.eng.handle({"op": "delete_profile", "name": "temp"})
+        self.assertTrue(resp["ok"])
+        sent = self.eng.ipc.last("config")
+        self.assertIsNotNone(sent)
+        self.assertNotIn("temp", sent["config"]["profiles"])
+
+    def test_save_profile_persists_lighting(self):
+        self.store.set_key_color(1, 1, "#ff0000")
+        self.store.data["lighting"]["brightness"] = 200
+        self.store.save()
+        resp = self.eng.handle({"op": "save_profile"})
+        self.assertTrue(resp["ok"])
+        profile = self.store.profile("default")
+        self.assertEqual(profile["lighting"]["keys"]["1,1"], "#ff0000")
+        self.assertEqual(profile["lighting"]["brightness"], 200)
+
+    def test_save_profile_broadcasts_profile_event(self):
+        resp = self.eng.handle({"op": "save_profile"})
+        self.assertTrue(resp["ok"])
+        sent = self.eng.ipc.last("profile")
+        self.assertIsNotNone(sent)
+        self.assertEqual(sent["name"], "default")
+
+    def test_save_profile_targets_named_profile(self):
+        self.store.ensure_profile("gaming")
+        self.store.set_key_color(2, 2, "#00ff00")
+        self.store.data["lighting"]["brightness"] = 255
+        self.store.save()
+        resp = self.eng.handle({"op": "save_profile", "name": "gaming"})
+        self.assertTrue(resp["ok"])
+        gaming = self.store.profile("gaming")
+        self.assertEqual(gaming["lighting"]["keys"]["2,2"], "#00ff00")
+        self.assertEqual(gaming["lighting"]["brightness"], 255)
+
+    def test_ensure_profile_clone_captures_global_lighting(self):
+        self.store.set_binding(2, 2, {"type": "combo", "combo": "ctrl+c", "label": "copy"})
+        self.store.set_key_color(1, 1, "#ff0000")
+        self.store.data["lighting"]["brightness"] = 200
+        self.store.data["lighting"]["effect"] = 5
+        self.store.save()
+        resp = self.eng.handle(
+            {"op": "ensure_profile", "name": "gaming", "label": "Gaming", "clone_from": "__current__"}
+        )
+        self.assertTrue(resp["ok"])
+        gaming = self.store.profile("gaming")
+        self.assertEqual(gaming["keys"]["2,2"]["combo"], "ctrl+c")
+        self.assertEqual(gaming["lighting"]["keys"]["1,1"], "#ff0000")
+        self.assertEqual(gaming["lighting"]["brightness"], 200)
+        self.assertEqual(gaming["lighting"]["effect"], 5)
+
+
+class MixSlotValidationTest(unittest.TestCase):
+    """set_mix used to persist unvalidated slots to config.json and only
+    then fail in set_mix_slots, leaving the bad state to survive a restart.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "config.json")
+        self.eng = Engine(store=self.store)
+        self.eng.executor = RecExecutor()
+        self.eng.via = FakeVia()
+        self.eng.ipc = RecIpc()
+        self.eng.connected = True
+
+    def tearDown(self):
+        self.eng.stop()
+        self.tmp.cleanup()
+
+    def test_non_dict_slots_are_rejected_not_persisted(self):
+        resp = self.eng.handle({"op": "set_mix", "slots": [["nope", 42]]})
+        self.assertTrue(resp["ok"])
+        for layer in self.store.data["lighting"]["mix"]["slots"]:
+            for slot in layer:
+                self.assertIsInstance(slot, dict)
+
+    def test_valid_slots_survive(self):
+        good = [{"effect": 5, "hue": 10, "sat": 20, "speed": 30, "time_ms": 1500}]
+        resp = self.eng.handle({"op": "set_mix", "slots": [good]})
+        self.assertTrue(resp["ok"])
+        slot = self.store.data["lighting"]["mix"]["slots"][0][0]
+        self.assertEqual(slot["effect"], 5)
+        self.assertEqual(slot["time_ms"], 1500)
+
+    def test_reload_after_bad_slots_still_works(self):
+        self.eng.handle({"op": "set_mix", "slots": "not-a-list"})
+        self.eng.handle({"op": "set_mix", "slots": [[None]]})
+        reloaded = Store(self.store.path)
+        self.assertIsInstance(reloaded.data["lighting"]["mix"]["slots"], list)

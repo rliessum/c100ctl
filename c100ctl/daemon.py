@@ -9,17 +9,24 @@ import signal
 import threading
 import time
 from copy import deepcopy
-from pathlib import Path
 from typing import Any
 
 from . import COLS, LOCKED_KEYS, PID, PRODUCT, ROWS, VID, __version__
 from .actions import ActionError, Executor
-from .config import Store, backup_dir, key_id, lock_path
+from .config import (
+    Store,
+    backup_dir,
+    default_advanced,
+    default_mix,
+    key_id,
+    lock_path,
+    merge_mix,
+    parse_key_id,
+)
 from .device import find_c100, hidraw_exists
 from .identity import layer_with_identity, looks_factory
 from .ipc import IpcServer
 from .pad import PadGrab
-from .config import default_advanced, default_mix, parse_key_id
 from .via import (
     MIX_RGB_EFFECT,
     PER_KEY_EFFECT,
@@ -89,7 +96,7 @@ class Engine:
         self._worker.start()
         self._led_map: list[list[int]] | None = None
         self._led_save_timer: threading.Timer | None = None
-        self._tap_lock = threading.Lock()
+        self._tap_lock = threading.RLock()
         self._pending_tap: dict[tuple[int, int], threading.Timer] = {}
         self._last_tap: dict[tuple[int, int], float] = {}
         self._tap_seq: dict[tuple[int, int], int] = {}
@@ -142,13 +149,13 @@ class Engine:
             for stop in self._macro_hold.values():
                 stop.set()
             self._macro_hold.clear()
+            self._down.clear()
+            self._consumed.clear()
+            self._hold_fired.clear()
+            self._momentary_from = None
         if self._idle_timer:
             self._idle_timer.cancel()
             self._idle_timer = None
-        self._down.clear()
-        self._consumed.clear()
-        self._hold_fired.clear()
-        self._momentary_from = None
 
     def run_forever(self) -> None:
         self.start_ipc()
@@ -260,7 +267,8 @@ class Engine:
         self._bump_idle()
         cell = (row, col)
         if pressed:
-            self._down.add(cell)
+            with self._tap_lock:
+                self._down.add(cell)
             if self._heatmap:
                 self._heatmap_hits[cell] = self._heatmap_hits.get(cell, 0) + 1
                 count = self._heatmap_hits[cell]
@@ -275,7 +283,8 @@ class Engine:
                     }
                 )
         else:
-            self._down.discard(cell)
+            with self._tap_lock:
+                self._down.discard(cell)
         if (row, col) in LOCKED_KEYS:
             return
         if pressed:
@@ -288,7 +297,8 @@ class Engine:
         if chord and cell in chord[0]:
             for other in chord[0]:
                 self._cancel_cell(other)
-                self._consumed.add(other)
+            with self._tap_lock:
+                self._consumed.update(chord[0])
             log.info("chord %s", sorted(chord[0]))
             self._dispatch_binding(dict(chord[1]))
             return
@@ -309,21 +319,24 @@ class Engine:
             hold = self._hold_timer.pop(cell, None)
             chord = self._chord_timer.pop(cell, None)
             stop = self._macro_hold.pop(cell, None)
+            consumed = cell in self._consumed
+            self._consumed.discard(cell)
+            fired = cell in self._hold_fired
+            self._hold_fired.discard(cell)
+            restore = self._momentary_from if fired else None
+            if restore:
+                self._momentary_from = None
         if hold:
             hold.cancel()
         if chord:
             chord.cancel()
         if stop:
             stop.set()
-        if cell in self._consumed:
-            self._consumed.discard(cell)
+        if consumed:
             return
-        if cell in self._hold_fired:
-            self._hold_fired.discard(cell)
-            if self._momentary_from:
-                name = self._momentary_from
-                self._momentary_from = None
-                self._switch_profile(name)
+        if fired:
+            if restore:
+                self._switch_profile(restore)
             return
         binding = self.store.get_binding(*cell)
         if binding and isinstance(binding.get("hold"), dict):
@@ -334,8 +347,8 @@ class Engine:
             pending = self._chord_timer.pop(cell, None)
             if pending:
                 pending.cancel()
-        if cell not in self._down or cell in self._consumed:
-            return
+            if cell not in self._down or cell in self._consumed:
+                return
         binding = self.store.get_binding(*cell)
         if not binding:
             return
@@ -355,11 +368,13 @@ class Engine:
     def _fire_hold(self, cell: tuple[int, int], hold: dict[str, Any]) -> None:
         with self._tap_lock:
             self._hold_timer.pop(cell, None)
-        if cell not in self._down or cell in self._consumed:
-            return
-        self._hold_fired.add(cell)
-        if hold.get("type") == "profile" and hold.get("momentary"):
-            self._momentary_from = self.store.active_profile_name()
+            if cell not in self._down or cell in self._consumed:
+                return
+            self._hold_fired.add(cell)
+            momentary = hold.get("type") == "profile" and hold.get("momentary")
+            if momentary:
+                self._momentary_from = self.store.active_profile_name()
+        if momentary:
             name = str(hold.get("profile") or "")
             log.info("hold %s,%s → momentary %s", cell[0], cell[1], name)
             if name:
@@ -431,8 +446,10 @@ class Engine:
         return out
 
     def _matching_chord(self) -> tuple[set[tuple[int, int]], dict[str, Any]] | None:
+        with self._tap_lock:
+            down = frozenset(self._down)
         for cells, binding in self._chords():
-            if cells <= self._down:
+            if cells <= down:
                 return cells, binding
         return None
 
@@ -895,7 +912,7 @@ class Engine:
                 lighting["effect"] = max(0, min(len(RGB_EFFECTS) - 1, int(req["effect"])))
             if "speed" in req:
                 lighting["speed"] = int(req["speed"])
-            if "color" in req and req["color"]:
+            if req.get("color"):
                 parse_hex_color(str(req["color"]))
                 color = str(req["color"])
                 lighting["color"] = color if color.startswith("#") else f"#{color.lstrip('#')}"
@@ -913,7 +930,10 @@ class Engine:
                 regs = [1 if int(x) else 0 for x in req["regions"][:100]]
                 mix["regions"] = regs + [0] * (100 - len(regs))
             if "slots" in req and isinstance(req["slots"], list):
-                mix["slots"] = req["slots"]
+                # Validate before saving: set_mix_slots indexes each entry as
+                # a dict, and an unchecked list would be persisted to
+                # config.json first and only then blow up.
+                mix["slots"] = merge_mix({"slots": req["slots"]})["slots"]
             lighting["effect"] = MIX_RGB_EFFECT
             self.store.save()
             if self.via and self.connected and not self._heatmap:
@@ -967,18 +987,18 @@ class Engine:
             self._broadcast({"event": "config", "config": self.store.snapshot()})
             return {"ok": True, "config": self.store.snapshot()}
         if op == "set_key_color":
-            color = req.get("color")
-            if color == "" or color == "off":
-                color = None
-            return self.set_key_color(int(req["row"]), int(req["col"]), color)
+            one: str | None = req.get("color")
+            if one in ("", "off"):
+                one = None
+            return self.set_key_color(int(req["row"]), int(req["col"]), one)
         if op == "set_key_colors":
             items = req.get("keys") or []
-            updates = []
+            updates: list[tuple[int, int, str | None]] = []
             for item in items:
-                color = item.get("color")
-                if color == "" or color == "off":
-                    color = None
-                updates.append((int(item["row"]), int(item["col"]), color))
+                hexcolor: str | None = item.get("color")
+                if hexcolor in ("", "off"):
+                    hexcolor = None
+                updates.append((int(item["row"]), int(item["col"]), hexcolor))
             return self.set_key_colors(updates)
         if op == "heatmap":
             active = req.get("active")
