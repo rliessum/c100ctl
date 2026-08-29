@@ -229,9 +229,37 @@ class Store:
         self.data["active_profile"] = name
         self.save()
 
-    def ensure_profile(self, name: str, label: str | None = None) -> None:
+    def ensure_profile(
+        self,
+        name: str,
+        label: str | None = None,
+        clone_from: str | None = None,
+    ) -> None:
+        """Create a profile if it doesn't exist.
+
+        Args:
+            name: Profile name (slug).
+            label: Display label (defaults to titlecased name).
+            clone_from: If set, clone keys and lighting from this profile.
+                       Pass "__current__" to clone from the active profile.
+        """
         if name not in self.data["profiles"]:
-            self.data["profiles"][name] = {"label": label or name.title(), "keys": {}}
+            source_name = clone_from
+            if clone_from == "__current__":
+                source_name = self.active_profile_name()
+
+            if source_name and source_name in self.data["profiles"]:
+                source = self.data["profiles"][source_name]
+                new_profile: dict[str, Any] = {
+                    "label": label or name.title(),
+                    "keys": deepcopy(source.get("keys", {})),
+                }
+                if "lighting" in source:
+                    new_profile["lighting"] = deepcopy(source["lighting"])
+            else:
+                new_profile = {"label": label or name.title(), "keys": {}}
+
+            self.data["profiles"][name] = new_profile
             self.save()
 
     def delete_profile(self, name: str) -> None:
@@ -241,6 +269,14 @@ class Store:
         if self.data["active_profile"] == name:
             self.data["active_profile"] = "default"
         self.save()
+
+    def list_profile_names(self) -> list[str]:
+        """Return list of profile names in consistent order (default first)."""
+        names = list(self.data.get("profiles", {}).keys())
+        if "default" in names:
+            names.remove("default")
+            names.insert(0, "default")
+        return names if names else ["default"]
 
     def lighting_keys(self) -> dict[str, str]:
         lighting = self.data.setdefault("lighting", {})

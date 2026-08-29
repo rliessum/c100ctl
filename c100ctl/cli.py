@@ -199,8 +199,15 @@ def cmd_profile(args: argparse.Namespace) -> int:
     c = _client()
     try:
         if args.create:
-            c.request("ensure_profile", name=args.create, label=args.create)
+            clone_from = "__current__" if getattr(args, "clone", True) else None
+            c.request("ensure_profile", name=args.create, label=args.create, clone_from=clone_from)
             print("created", args.create)
+            return 0
+        if args.delete:
+            resp = c.request("delete_profile", name=args.delete)
+            if not resp.get("ok"):
+                raise SystemExit(resp.get("error", "failed"))
+            print("deleted", args.delete)
             return 0
         if args.use:
             resp = c.request("set_profile", name=args.use)
@@ -273,8 +280,11 @@ def build_parser() -> argparse.ArgumentParser:
     adv.add_argument("--idle-dim", type=int, help="seconds, 0=off")
 
     pr = sub.add_parser("profile", help="list or switch profiles")
-    pr.add_argument("--use")
-    pr.add_argument("--create")
+    pr.add_argument("--use", help="switch to this profile")
+    pr.add_argument("--create", help="create a new profile (clones current by default)")
+    pr.add_argument("--delete", help="delete a profile (cannot delete default)")
+    pr.add_argument("--no-clone", dest="clone", action="store_false", default=True,
+                    help="create an empty profile instead of cloning current")
     pr.add_argument("--json", action="store_true", help="output as JSON (for scripts)")
     return p
 
