@@ -242,9 +242,11 @@ class Store:
             label: Display label (defaults to titlecased name).
             clone_from: If set, clone keys and lighting from this profile.
                        Pass "__current__" to clone from the active profile.
+                       When "__current__", also captures global lighting.
         """
         if name not in self.data["profiles"]:
             source_name = clone_from
+            clone_global_lighting = clone_from == "__current__"
             if clone_from == "__current__":
                 source_name = self.active_profile_name()
 
@@ -256,8 +258,12 @@ class Store:
                 }
                 if "lighting" in source:
                     new_profile["lighting"] = deepcopy(source["lighting"])
+                elif clone_global_lighting and self.data.get("lighting"):
+                    new_profile["lighting"] = deepcopy(self.data["lighting"])
             else:
                 new_profile = {"label": label or name.title(), "keys": {}}
+                if clone_global_lighting and self.data.get("lighting"):
+                    new_profile["lighting"] = deepcopy(self.data["lighting"])
 
             self.data["profiles"][name] = new_profile
             self.save()
@@ -268,6 +274,20 @@ class Store:
         self.data["profiles"].pop(name, None)
         if self.data["active_profile"] == name:
             self.data["active_profile"] = "default"
+        self.save()
+
+    def save_profile(self, name: str | None = None) -> None:
+        """Persist current global lighting into the profile.
+
+        The profile's keys are already updated via set_binding, so this
+        captures the current global lighting state into the profile.
+        """
+        name = name or self.active_profile_name()
+        if name not in self.data["profiles"]:
+            raise KeyError(name)
+        profile = self.data["profiles"][name]
+        if self.data.get("lighting"):
+            profile["lighting"] = deepcopy(self.data["lighting"])
         self.save()
 
     def list_profile_names(self) -> list[str]:
