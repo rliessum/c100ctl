@@ -95,6 +95,57 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.store.set_profile("missing")
 
+    def test_ensure_profile_clone_from_current(self):
+        self.store.set_binding(2, 2, {"type": "combo", "combo": "ctrl+c", "label": "copy"})
+        self.store.set_key_color(1, 1, "#ff0000")
+        self.store.data["lighting"]["brightness"] = 200
+        self.store.profile()["lighting"] = {"keys": {"1,1": "#00ff00"}, "brightness": 150}
+        self.store.save()
+
+        self.store.ensure_profile("gaming", "Gaming", clone_from="__current__")
+
+        gaming = self.store.profile("gaming")
+        self.assertEqual(gaming["keys"]["2,2"]["combo"], "ctrl+c")
+        self.assertEqual(gaming["lighting"]["keys"]["1,1"], "#00ff00")
+        self.assertEqual(gaming["lighting"]["brightness"], 150)
+        self.assertEqual(self.store.get_binding(2, 2)["combo"], "ctrl+c")
+
+    def test_ensure_profile_clone_from_named(self):
+        self.store.ensure_profile("work")
+        self.store.set_profile("work")
+        self.store.set_binding(3, 3, {"type": "url", "url": "https://x", "label": "x"})
+        self.store.set_profile("default")
+
+        self.store.ensure_profile("work-copy", clone_from="work")
+
+        copy = self.store.profile("work-copy")
+        self.assertEqual(copy["keys"]["3,3"]["url"], "https://x")
+
+    def test_ensure_profile_clone_nonexistent_creates_empty(self):
+        self.store.ensure_profile("fresh", clone_from="ghost")
+        self.assertEqual(self.store.profile("fresh")["keys"], {})
+
+    def test_ensure_profile_no_clone_is_empty(self):
+        self.store.set_binding(1, 1, {"type": "text", "text": "hi", "label": "hi"})
+        self.store.ensure_profile("empty")
+        self.assertEqual(self.store.profile("empty")["keys"], {})
+
+    def test_list_profile_names(self):
+        self.assertEqual(self.store.list_profile_names(), ["default"])
+        self.store.ensure_profile("z-last")
+        self.store.ensure_profile("a-first")
+        names = self.store.list_profile_names()
+        self.assertEqual(names[0], "default")
+        self.assertIn("z-last", names)
+        self.assertIn("a-first", names)
+
+    def test_delete_active_profile_falls_back_to_default(self):
+        self.store.ensure_profile("temp")
+        self.store.set_profile("temp")
+        self.assertEqual(self.store.active_profile_name(), "temp")
+        self.store.delete_profile("temp")
+        self.assertEqual(self.store.active_profile_name(), "default")
+
     def test_missing_active_profile_falls_back(self):
         self.store.data["active_profile"] = "ghost"
         self.assertEqual(self.store.active_profile_name(), "default")
