@@ -217,10 +217,32 @@ class CmdTest(unittest.TestCase):
             empty = argparse.Namespace(poll=None, debounce_type=None, debounce_ms=None, nkro=None, idle_dim=None)
             with self.assertRaises(SystemExit):
                 cmd_advanced(empty)
-            self.assertEqual(cmd_profile(argparse.Namespace(create="g", use=None)), 0)
-            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use="g")), 0)
-            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use=None)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create="g", use=None, json=False)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use="g", json=False)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use=None, json=False)), 0)
             self.assertEqual(cmd_provision(argparse.Namespace()), 0)
+
+    def test_profile_json_output(self):
+        import json as json_mod
+        client = self._client({
+            "ok": True,
+            "config": {
+                "active_profile": "gaming",
+                "profiles": {"default": {}, "gaming": {}, "work": {}},
+            },
+        })
+        with patch("c100ctl.cli._client", return_value=client):
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                ns = argparse.Namespace(create=None, use=None, json=True)
+                result = cmd_profile(ns)
+                self.assertEqual(result, 0)
+                output = mock_stdout.getvalue().strip()
+                data = json_mod.loads(output)
+                self.assertTrue(data["ok"])
+                self.assertEqual(data["active"], "gaming")
+                self.assertIn("default", data["profiles"])
+                self.assertIn("gaming", data["profiles"])
+                self.assertIn("work", data["profiles"])
 
     def test_client_requires_daemon(self):
         with patch("c100ctl.cli.daemon_available", return_value=False):

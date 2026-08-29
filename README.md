@@ -192,6 +192,18 @@ Written only when you click **Apply** in the GUI or run `c100ctl advanced` — n
 
 Firmware version is shown in the header (read from the pad).
 
+## Omarchy Bar Widget
+
+An Omarchy bar widget for quick profile switching lives in [`omarchy-plugin/`](omarchy-plugin/). To install:
+
+```bash
+cp -r omarchy-plugin ~/.config/omarchy/plugins/io.github.rliessum.c100ctl
+omarchy plugin enable io.github.rliessum.c100ctl
+omarchy-shell shell rescanPlugins
+```
+
+Click the profile name in the bar to open the panel and switch profiles. See [`omarchy-plugin/README.md`](omarchy-plugin/README.md) for details.
+
 ## CLI
 
 ```bash
