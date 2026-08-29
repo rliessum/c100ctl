@@ -327,14 +327,7 @@ class C100Window(Adw.ApplicationWindow):
         self.toasts.set_child(toolbar)
         self.set_content(self.toasts)
 
-        self.install_action("win.provision", None, self._action_provision)
-        self.install_action("win.new-profile", None, self._action_new_profile)
-        self.install_action("win.delete-profile", None, self._action_delete_profile)
-        self.install_action("win.save-profile", None, self._action_save_profile)
-        self.install_action("win.import", None, self._action_import)
-        self.install_action("win.export", None, self._action_export)
-        self.install_action("win.clear-colors", None, self._action_clear_colors)
-        self.install_action("win.about", None, self._action_about)
+        self._register_actions()
 
         keys_ctrl = Gtk.EventControllerKey()
         keys_ctrl.connect("key-pressed", self._on_win_key)
@@ -1716,6 +1709,27 @@ class C100Window(Adw.ApplicationWindow):
         """Called from idle to clear _building after GTK settles."""
         self._building = False
         return False
+
+    def _register_actions(self) -> None:
+        """Register GActions for the hamburger menu.
+
+        Gio.Menu items with detailed names like 'win.foo' look up
+        Gio.SimpleAction on the window's GActionMap, not widget actions.
+        """
+        actions = [
+            ("provision", self._action_provision),
+            ("new-profile", self._action_new_profile),
+            ("delete-profile", self._action_delete_profile),
+            ("save-profile", self._action_save_profile),
+            ("import", self._action_import),
+            ("export", self._action_export),
+            ("clear-colors", self._action_clear_colors),
+            ("about", self._action_about),
+        ]
+        for name, handler in actions:
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", handler)
+            self.add_action(action)
 
     def _pump(self) -> bool:
         if not self.client:
