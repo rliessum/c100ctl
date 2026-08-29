@@ -421,6 +421,9 @@ def resolve_key_name(token: str) -> str:
         raise ValueError("empty key name")
     if t in ALIASES:
         return ALIASES[t]
+    compact = t.replace("-", "").replace("_", "")
+    if compact in ALIASES:
+        return ALIASES[compact]
     up = t.upper()
     if up.startswith("KEY_"):
         return up
@@ -465,7 +468,14 @@ class Combo:
 
 
 def parse_combo(text: str) -> Combo:
-    raw = [p.strip() for p in text.replace("-", "+").split("+") if p.strip()]
+    text = text.strip()
+    if "+" in text:
+        raw = ["minus" if p.strip() == "" else p.strip() for p in text.split("+")]
+        raw = [p for p in raw if p]
+    elif "-" in text:
+        raw = [p.strip() for p in text.split("-") if p.strip()]
+    else:
+        raw = [text] if text else []
     if not raw:
         raise ValueError("empty combo")
     keys = [resolve_key_name(p) for p in raw]

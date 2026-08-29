@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -25,6 +26,17 @@ class SessionTest(unittest.TestCase):
             self.assertEqual(env["WAYLAND_DISPLAY"], "wayland-1")
             self.assertEqual(env["HYPRLAND_INSTANCE_SIGNATURE"], "sig-abc")
             self.assertTrue(env["DBUS_SESSION_BUS_ADDRESS"].endswith("/bus"))
+
+    def test_hypr_signature_uses_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hypr = Path(tmp) / "hypr"
+            old = hypr / "zzzz_stale"
+            new = hypr / "aaaa_live"
+            old.mkdir(parents=True)
+            time.sleep(0.02)
+            new.mkdir()
+            env = graphical_env({"HOME": tmp, "PATH": "/bin", "XDG_RUNTIME_DIR": tmp})
+            self.assertEqual(env["HYPRLAND_INSTANCE_SIGNATURE"], "aaaa_live")
 
     def test_hyprctl_available(self):
         self.assertFalse(hyprctl_available({"PATH": "/nope", "XDG_RUNTIME_DIR": "/nope"}))

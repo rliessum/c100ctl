@@ -1606,6 +1606,8 @@ class C100Window(Adw.ApplicationWindow):
             if self._heatmap_ui and not self.status.get("heatmap"):
                 resp = self.client.request("heatmap", active=True)
                 self._apply_heatmap_hits((resp or {}).get("hits") or {})
+            elif not self._heatmap_ui and self.status.get("heatmap"):
+                self.client.request("heatmap", active=False)
         except OSError:
             self.client = None
             self.status = {"connected": False}

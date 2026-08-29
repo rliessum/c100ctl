@@ -28,6 +28,22 @@ class KeycodeTest(unittest.TestCase):
         self.assertEqual(c.key, "KEY_TAB")
         self.assertEqual(c.modifiers, ("KEY_LEFTALT",))
 
+    def test_combo_ctrl_minus(self):
+        c = parse_combo("Ctrl+-")
+        self.assertEqual(c.key, "KEY_MINUS")
+        self.assertIn("KEY_LEFTCTRL", c.modifiers)
+        c = parse_combo("Ctrl+Shift+-")
+        self.assertEqual(c.key, "KEY_MINUS")
+        self.assertIn("KEY_LEFTCTRL", c.modifiers)
+        self.assertIn("KEY_LEFTSHIFT", c.modifiers)
+        c = parse_combo("ctrl+minus")
+        self.assertEqual(c.key, "KEY_MINUS")
+
+    def test_combo_page_down(self):
+        c = parse_combo("Ctrl+Page-Down")
+        self.assertEqual(c.key, "KEY_PAGEDOWN")
+        self.assertIn("KEY_LEFTCTRL", c.modifiers)
+
     def test_combo_mod_only(self):
         c = parse_combo("ctrl")
         self.assertEqual(c.key, "KEY_LEFTCTRL")

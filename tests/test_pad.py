@@ -38,6 +38,16 @@ class PadHandleTest(unittest.TestCase):
         self.pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=ecodes.KEY_Z, value=1))
         self.assertEqual(self.hits, [(8, 8, True)])
 
+    def test_matrix_fallback_release(self):
+        via = MagicMock()
+        via.matrix_pressed.return_value = [(8, 8)]
+        self.pad.via = via
+        self.pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=ecodes.KEY_Z, value=1))
+        via.matrix_pressed.return_value = []
+        self.pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=ecodes.KEY_Z, value=0))
+        self.assertEqual(self.hits, [(8, 8, True), (8, 8, False)])
+        via.matrix_pressed.assert_called_once()
+
     def test_unmapped_without_via(self):
         self.pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=ecodes.KEY_Z, value=1))
         self.assertEqual(self.hits, [])

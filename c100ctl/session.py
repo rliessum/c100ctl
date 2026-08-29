@@ -22,11 +22,12 @@ def graphical_env(base: dict[str, str] | None = None) -> dict[str, str]:
     hypr = Path(runtime) / "hypr"
     if hypr.is_dir() and not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
         sigs = sorted(
-            (p.name for p in hypr.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            (p for p in hypr.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if sigs:
-            env["HYPRLAND_INSTANCE_SIGNATURE"] = sigs[0]
+            env["HYPRLAND_INSTANCE_SIGNATURE"] = sigs[0].name
 
     bus = Path(runtime) / "bus"
     if bus.exists():

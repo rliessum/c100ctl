@@ -35,6 +35,7 @@ class PadGrab:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._evdev_to_cell = identity_evdev_map()
+        self._code_cell: dict[int, tuple[int, int]] = {}
         self._last: dict[tuple[int, int], tuple[bool, float]] = {}
 
     def start(self) -> None:
@@ -108,14 +109,21 @@ class PadGrab:
         if isinstance(key, list):
             key = key[0]
         cell = self._evdev_to_cell.get(key)
-        if cell is None and self.via is not None and pressed:
-            try:
-                found = self.via.matrix_pressed(10, 10)
-            except Exception as e:
-                log.debug("matrix poll failed: %s", e)
-                found = []
-            if len(found) == 1:
-                cell = found[0]
+        if pressed:
+            if cell is None and self.via is not None:
+                try:
+                    found = self.via.matrix_pressed(10, 10)
+                except Exception as e:
+                    log.debug("matrix poll failed: %s", e)
+                    found = []
+                if len(found) == 1:
+                    cell = found[0]
+            if cell is not None:
+                self._code_cell[event.code] = cell
+        elif cell is None:
+            cell = self._code_cell.pop(event.code, None)
+        else:
+            self._code_cell.pop(event.code, None)
         if cell is None:
             log.debug("unmapped key %s", key)
             return

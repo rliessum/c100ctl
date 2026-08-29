@@ -120,6 +120,15 @@ class Engine:
                     self._apply_lighting()
             except Exception:
                 log.exception("restore lighting on stop")
+        self._reset_gestures()
+        with self._jobs_cv:
+            self._jobs_cv.notify_all()
+        self._disconnect()
+        self.executor.close()
+        if self.ipc:
+            self.ipc.stop()
+
+    def _reset_gestures(self) -> None:
         with self._tap_lock:
             for timer in self._pending_tap.values():
                 timer.cancel()
@@ -136,12 +145,10 @@ class Engine:
         if self._idle_timer:
             self._idle_timer.cancel()
             self._idle_timer = None
-        with self._jobs_cv:
-            self._jobs_cv.notify_all()
-        self._disconnect()
-        self.executor.close()
-        if self.ipc:
-            self.ipc.stop()
+        self._down.clear()
+        self._consumed.clear()
+        self._hold_fired.clear()
+        self._momentary_from = None
 
     def run_forever(self) -> None:
         self.start_ipc()
@@ -164,6 +171,7 @@ class Engine:
         if not found:
             return
         log.info("found C100 at %s serial=%s", found.via_path, found.serial)
+        via = None
         try:
             via = ViaClient(found.via_path)
             protocol = via.protocol_version()
@@ -171,6 +179,11 @@ class Engine:
             keymap = via.read_keymap(layers, ROWS, COLS)
         except (ViaError, OSError) as e:
             log.warning("VIA open failed: %s", e)
+            if via is not None:
+                try:
+                    via.close()
+                except Exception:
+                    pass
             return
         self.via = via
         self.serial = found.serial
@@ -225,6 +238,7 @@ class Engine:
     def _disconnect(self) -> None:
         was = self.connected
         self.connected = False
+        self._reset_gestures()
         if self.pad:
             try:
                 self.pad.stop()
@@ -313,7 +327,7 @@ class Engine:
             return
         binding = self.store.get_binding(*cell)
         if binding and isinstance(binding.get("hold"), dict):
-            self._dispatch_binding(dict(binding))
+            self._dispatch_binding(dict(binding), cell=cell)
 
     def _arm_key(self, cell: tuple[int, int]) -> None:
         with self._tap_lock:
@@ -346,6 +360,11 @@ class Engine:
         self._hold_fired.add(cell)
         if hold.get("type") == "profile" and hold.get("momentary"):
             self._momentary_from = self.store.active_profile_name()
+            name = str(hold.get("profile") or "")
+            log.info("hold %s,%s → momentary %s", cell[0], cell[1], name)
+            if name:
+                self._switch_profile(name)
+            return
         log.info("hold %s,%s → %s", cell[0], cell[1], hold.get("type"))
         self._dispatch_binding(dict(hold), cell=cell)
 
@@ -483,8 +502,13 @@ class Engine:
             if isinstance(lighting.get("keys"), dict):
                 store_l["keys"] = dict(lighting["keys"])
             for field in ("brightness", "effect", "speed", "color", "per_key_type", "mix"):
-                if field in lighting:
-                    store_l[field] = lighting[field]
+                if field not in lighting:
+                    continue
+                value = lighting[field]
+                if field == "mix" and isinstance(value, dict):
+                    store_l[field] = deepcopy(value)
+                else:
+                    store_l[field] = value
             self.store.save()
             if self.via and self.connected:
                 try:
@@ -553,6 +577,8 @@ class Engine:
         self._broadcast({"event": "lighting", "lighting": lighting, "config": self.store.snapshot()})
 
     def _bump_idle(self) -> None:
+        if self._heatmap:
+            return
         if self._dimmed and self.via and self.connected:
             try:
                 self.via.set_brightness(self._pre_dim_brightness, save=False)
@@ -637,10 +663,7 @@ class Engine:
             type_id = int(lighting.get("per_key_type") or 0)
             self.via.enable_per_key(save=False)
             self.via.set_per_key_type(type_id)
-            if colors:
-                self._write_all_key_colors(dict(colors), save=True)
-            else:
-                self.via.save_leds()
+            self._write_all_key_colors(dict(colors) if isinstance(colors, dict) else {}, save=True)
         elif effect == MIX_RGB_EFFECT:
             self._apply_mix(lighting.get("mix") or default_mix())
         self._dimmed = False
@@ -665,31 +688,16 @@ class Engine:
     def _write_all_key_colors(self, colors: dict[str, str], save: bool = True) -> None:
         if not self.via:
             return
-        packed: dict[int, tuple[int, int, int]] = {}
+        rgbs = [(0, 0, 0)] * (ROWS * COLS)
         for kid, hex_color in colors.items():
             try:
-                r, c = (int(x) for x in kid.split(",", 1))
-                packed[self._led_index(r, c)] = rgb_to_hsv255(*parse_hex_color(hex_color))
+                r, c = (int(x) for x in str(kid).split(",", 1))
+                idx = self._led_index(r, c)
+                if 0 <= idx < len(rgbs):
+                    rgbs[idx] = parse_hex_color(hex_color)
             except (ValueError, TypeError):
                 continue
-        if not packed:
-            return
-        start = min(packed)
-        end = max(packed)
-        i = start
-        while i <= end:
-            chunk: list[tuple[int, int, int]] = []
-            j = i
-            while j <= end and len(chunk) < 9 and j in packed:
-                chunk.append(packed[j])
-                j += 1
-            if chunk:
-                self.via.set_leds_hsv(i, chunk)
-                i = j
-            else:
-                i += 1
-        if save:
-            self.via.save_leds()
+        self.via.write_all_rgb(rgbs, save=save)
 
     def _schedule_led_save(self) -> None:
         if self._led_save_timer:
@@ -710,26 +718,27 @@ class Engine:
         return {key_id(r, c): n for (r, c), n in self._heatmap_hits.items() if n}
 
     def _paint_heatmap(self) -> None:
-        if not self.via or not self.connected:
+        if not self.via:
             return
         try:
             self.via.set_brightness(255, save=False)
             self.via.enable_per_key(save=False)
-            colors = [
-                heatmap_rgb(self._heatmap_hits.get((r, c), 0))
-                for r in range(ROWS)
-                for c in range(COLS)
-            ]
+            self.via.set_per_key_type(0)
+            colors = [(0, 0, 0)] * (ROWS * COLS)
+            for r in range(ROWS):
+                for c in range(COLS):
+                    idx = self._led_index(r, c)
+                    if 0 <= idx < len(colors):
+                        colors[idx] = heatmap_rgb(self._heatmap_hits.get((r, c), 0))
             self.via.write_all_rgb(colors, save=False)
         except ViaError:
             log.warning("heatmap paint failed", exc_info=True)
 
     def _paint_heatmap_cell(self, cell: tuple[int, int]) -> None:
-        if not self.via or not self.connected:
+        if not self.via:
             return
         color = heatmap_hex(self._heatmap_hits.get(cell, 0))
         try:
-            self.via.enable_per_key(save=False)
             self._write_key_color(cell[0], cell[1], color, save=False)
         except ViaError:
             log.warning("heatmap cell failed", exc_info=True)
@@ -740,9 +749,13 @@ class Engine:
         if active is True:
             was = self._heatmap
             self._heatmap = True
+            self._dimmed = False
             if self._idle_timer:
                 self._idle_timer.cancel()
                 self._idle_timer = None
+            if self._led_save_timer:
+                self._led_save_timer.cancel()
+                self._led_save_timer = None
             if not was or reset:
                 self._paint_heatmap()
         elif active is False:
@@ -780,6 +793,7 @@ class Engine:
         if self.via and self.connected and not self._heatmap:
             if any(color for _r, _c, color in normalized):
                 self.via.enable_per_key(save=False)
+                self.via.set_per_key_type(int(lighting.get("per_key_type") or 0))
             for row, col, color in normalized:
                 self._write_key_color(row, col, color, save=False)
             self._schedule_led_save()

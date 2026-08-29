@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import patch
 
+from evdev import ecodes
+
 from c100ctl.keycodes import parse_combo, parse_macro
-from c100ctl.uinput_kb import VirtualKeyboard
+from c100ctl.uinput_kb import VirtualKeyboard, _CAP, _KEY_CODES
 
 
 class FakeUInput:
@@ -48,3 +50,11 @@ class UInputTest(unittest.TestCase):
     def test_unknown_key(self):
         with self.assertRaises(ValueError):
             self.kb.tap("NOT_A_KEY")
+
+
+class UInputCapsTest(unittest.TestCase):
+    def test_key_cnt_not_enabled(self):
+        self.assertNotIn(ecodes.KEY_CNT, _KEY_CODES)
+        self.assertNotIn(0, _KEY_CODES)
+        self.assertNotIn(ecodes.KEY_CNT, _CAP[ecodes.EV_KEY])
+        self.assertIn(ecodes.KEY_A, _CAP[ecodes.EV_KEY])

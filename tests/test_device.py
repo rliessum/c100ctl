@@ -35,11 +35,12 @@ class DeviceTest(unittest.TestCase):
             d.info.product = pid
             return d
 
-        paths = ["/dev/input/event1", "/dev/input/event2", "/dev/input/event3"]
+        paths = ["/dev/input/event1", "/dev/input/event2", "/dev/input/event3", "/dev/input/event4"]
         mapping = {
             "/dev/input/event1": fake_dev(paths[0], "Keychron C100 8K Keyboard", 0x3434, 0x042C),
             "/dev/input/event2": fake_dev(paths[1], "Keychron C100 8K Mouse", 0x3434, 0x042C),
             "/dev/input/event3": fake_dev(paths[2], "Keychron Q1", 0x3434, 0x0100),
+            "/dev/input/event4": fake_dev(paths[3], "C100 Control", 0x3434, 0x042C),
         }
 
         def open_dev(path):

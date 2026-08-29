@@ -9,11 +9,14 @@ from evdev import UInput, ecodes
 
 from .keycodes import Combo, MacroStep, chars_to_taps, parse_combo, parse_macro
 
+_KEY_MAX = int(getattr(ecodes, "KEY_MAX", 767))
 _KEY_CODES: list[int] = []
 for name, value in ecodes.ecodes.items():
+    if name in {"KEY_CNT", "KEY_MAX", "KEY_MIN"}:
+        continue
     if not (name.startswith("KEY_") or name.startswith("BTN_")):
         continue
-    if isinstance(value, int):
+    if isinstance(value, int) and 0 < value <= _KEY_MAX:
         _KEY_CODES.append(value)
 
 _CAP = {
@@ -41,7 +44,7 @@ def _code(name: str) -> int:
 
 class VirtualKeyboard:
     def __init__(self) -> None:
-        self._ui = UInput(_CAP, name="C100 Control", vendor=0x3434, product=0x042C)
+        self._ui = UInput(_CAP, name="c100ctl virt", vendor=0, product=0)
 
     def close(self) -> None:
         self._ui.close()

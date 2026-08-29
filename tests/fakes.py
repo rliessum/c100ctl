@@ -134,7 +134,10 @@ class FakeVia:
             self.hsv_writes.append((start + i, tuple(hsv)))
 
     def write_all_rgb(self, colors, save: bool = True) -> None:
-        self.calls.append(("write_all_rgb", len(list(colors)), save))
+        seq = list(colors)
+        self.calls.append(("write_all_rgb", len(seq), save))
+        for i, rgb in enumerate(seq):
+            self.hsv_writes.append((i, tuple(rgb)))
 
     def set_mix_regions(self, regions) -> None:
         self.regions = list(regions)

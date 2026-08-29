@@ -254,8 +254,6 @@ class ViaClient:
 
     def enable_per_key(self, save: bool = True) -> None:
         self.set_effect(PER_KEY_EFFECT, save=save)
-        # Subcommand 8 is per-key *type* (solid/breathing/…), not the VIA effect id.
-        self._cmd([KC_RGB, KC_RGB_SET_EFFECT, PER_KEY_RGB_SOLID])
 
     def save_leds(self) -> None:
         self._cmd([KC_RGB, KC_RGB_SAVE])

@@ -311,3 +311,112 @@ class DaemonIpcTest(unittest.TestCase):
         self.assertEqual(self.store.get_key_color(1, 1), "#ff0000")
         self.assertTrue(any(c[0] == "enable_per_key" for c in self.eng.via.calls))
         self.assertFalse(self.eng.status()["heatmap"])
+
+    def test_heatmap_paints_before_connected(self):
+        self.eng.connected = False
+        self.eng._heatmap = True
+        self.eng.via.calls.clear()
+        self.eng._paint_heatmap()
+        self.assertTrue(any(c[0] == "write_all_rgb" for c in self.eng.via.calls))
+
+    def test_set_key_color_keeps_per_key_type(self):
+        self.store.data["lighting"]["per_key_type"] = 2
+        self.eng.via.calls.clear()
+        self.eng.handle({"op": "set_key_color", "row": 1, "col": 1, "color": "#ff0000"})
+        types = [c for c in self.eng.via.calls if c[0] == "set_per_key_type"]
+        self.assertTrue(types)
+        self.assertEqual(types[-1][1], 2)
+
+    def test_heatmap_restore_writes_full_grid(self):
+        self.store.set_key_color(1, 1, "#ff0000")
+        self.store.data["lighting"]["effect"] = 23
+        self.eng.handle({"op": "heatmap", "active": True})
+        self.eng._on_key(3, 3, True)
+        self.eng.via.calls.clear()
+        self.eng.handle({"op": "heatmap", "active": False})
+        full = [c for c in self.eng.via.calls if c[0] == "write_all_rgb"]
+        self.assertTrue(full)
+        self.assertEqual(full[-1][1], 100)
+
+    def test_mix_not_aliased_to_profile(self):
+        self.store.ensure_profile("gaming")
+        self.store.data["lighting"]["mix"] = {"regions": [1] * 100, "slots": []}
+        self.eng.handle({"op": "save_profile_lighting", "name": "gaming"})
+        self.eng.handle({"op": "set_profile", "name": "gaming"})
+        self.assertIsNot(
+            self.store.data["lighting"]["mix"],
+            self.store.data["profiles"]["gaming"]["lighting"]["mix"],
+        )
+        self.eng.handle({"op": "set_mix", "regions": [0] * 100})
+        self.assertEqual(self.store.data["profiles"]["gaming"]["lighting"]["mix"]["regions"][0], 1)
+
+    def test_app_hold_double_tap_closes(self):
+        self.store.set_binding(
+            2,
+            2,
+            {
+                "type": "app",
+                "desktop_id": "x.desktop",
+                "label": "x",
+                "hold": {"type": "profile", "profile": "default", "momentary": True},
+            },
+        )
+        self.eng._on_key(2, 2, True)
+        self.eng._on_key(2, 2, False)
+        self.eng._on_key(2, 2, True)
+        self.eng._on_key(2, 2, False)
+        self._wait_runs(1)
+        self.assertTrue(self.exec.runs[0].get("_close"))
+
+    def test_disconnect_stops_hold_macro(self):
+        self.store.set_binding(4, 5, {"type": "macro", "macro": "a", "repeat": "hold", "label": "a"})
+        self.eng._on_key(4, 5, True)
+        time.sleep(0.08)
+        before = len(self.exec.runs)
+        self.eng._disconnect()
+        time.sleep(0.1)
+        self.assertEqual(self.exec.runs[-1]["type"], "macro")
+        self.assertLessEqual(len(self.exec.runs), before + 1)
+        self.assertEqual(self.eng._down, set())
+
+    def test_via_handshake_closes_on_error(self):
+        class Boom:
+            def __init__(self, path):
+                self.path = path
+                self.closed = False
+
+            def protocol_version(self):
+                from c100ctl.via import ViaError
+
+                raise ViaError("timeout")
+
+            def close(self):
+                self.closed = True
+
+        created = []
+
+        def ctor(path):
+            v = Boom(path)
+            created.append(v)
+            return v
+
+        from c100ctl.device import C100Device
+        from c100ctl.hid import HidInfo
+
+        info = HidInfo("/dev/hidraw9", 0x3434, 0x042C, "ser", "C100", 0xFF60, 0x61, 0)
+        found = C100Device(serial="ser", via=info, evdev_paths=["/dev/input/event1"])
+        with patch("c100ctl.daemon.find_c100", return_value=found), patch(
+            "c100ctl.daemon.ViaClient", side_effect=ctor
+        ):
+            self.eng._try_connect()
+        self.assertTrue(created)
+        self.assertTrue(created[0].closed)
+
+    def test_idle_dim_cleared_on_heatmap(self):
+        self.eng._dimmed = True
+        self.eng._pre_dim_brightness = 80
+        self.eng.handle({"op": "heatmap", "active": True})
+        self.assertFalse(self.eng._dimmed)
+        self.eng.via.calls.clear()
+        self.eng._on_key(1, 1, True)
+        self.assertFalse(any(c[0] == "set_brightness" and c[1] == 80 for c in self.eng.via.calls))

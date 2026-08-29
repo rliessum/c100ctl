@@ -32,6 +32,8 @@ def _is_c100_evdev(dev: InputDevice) -> bool:
     if info.vendor != VID or info.product != PID:
         return False
     name = dev.name or ""
+    if name == "C100 Control":
+        return False
     return "C100" in name
 
 
@@ -44,6 +46,9 @@ def find_evdev_paths(serial: str | None = None) -> list[str]:
             continue
         try:
             if not _is_c100_evdev(dev):
+                continue
+            phys = getattr(dev, "phys", "") or ""
+            if phys == "py-evdev-uinput":
                 continue
             if serial and dev.uniq and dev.uniq != serial:
                 continue
