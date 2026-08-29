@@ -1,0 +1,50 @@
+# Maintainer: Richard van Liessum <richard@liessum.net>
+pkgname=c100ctl-git
+pkgver=r0.0000000
+pkgrel=1
+pkgdesc='Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings (git version)'
+arch=('any')
+url='https://github.com/rliessum/c100ctl'
+license=('MIT')
+depends=(
+    'python>=3.11'
+    'python-gobject'
+    'gtk4'
+    'libadwaita'
+    'python-evdev'
+    'hidapi'
+)
+makedepends=(
+    'git'
+    'python-build'
+    'python-installer'
+    'python-setuptools'
+    'python-wheel'
+)
+conflicts=('c100ctl')
+provides=('c100ctl')
+install=c100ctl.install
+source=("$pkgname::git+https://github.com/rliessum/c100ctl.git#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$pkgname"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd "$pkgname"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "$pkgname"
+
+    python -m installer --destdir="$pkgdir" dist/*.whl
+
+    install -Dm644 packaging/70-c100ctl.rules "$pkgdir/usr/lib/udev/rules.d/70-c100ctl.rules"
+    install -Dm644 packaging/c100ctl.system.service "$pkgdir/usr/lib/systemd/user/c100ctl.service"
+    install -Dm644 packaging/c100ctl.desktop "$pkgdir/usr/share/applications/c100ctl.desktop"
+    install -Dm644 packaging/c100ctl.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/c100ctl.svg"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/${pkgname%-git}/LICENSE"
+}

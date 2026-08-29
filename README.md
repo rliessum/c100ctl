@@ -249,6 +249,103 @@ rm -f ~/.local/share/applications/c100ctl.desktop
 rm -f ~/.config/systemd/user/c100ctl.service
 ```
 
+## Arch Linux / Omarchy (system package)
+
+For a proper system-wide install on Arch-based distributions (including Omarchy), use the PKGBUILDs in `packaging/arch/`.
+
+### Before installing
+
+If you previously installed via `install.sh`, remove the user-local files first:
+
+```bash
+systemctl --user disable --now c100ctl.service
+rm -f ~/.local/bin/c100ctl
+rm -rf ~/.local/share/c100ctl
+rm -f ~/.local/share/applications/c100ctl.desktop
+rm -f ~/.config/systemd/user/c100ctl.service
+systemctl --user daemon-reload
+```
+
+### Install the -git package (tracks main, works before the first release)
+
+```bash
+git clone https://github.com/rliessum/c100ctl.git
+cd c100ctl/packaging/arch/c100ctl-git
+makepkg -si
+```
+
+### Update the -git package (after new commits on GitHub)
+
+```bash
+cd c100ctl
+git pull
+cd packaging/arch/c100ctl-git
+makepkg -si
+```
+
+Or re-clone from scratch:
+
+```bash
+rm -rf c100ctl
+git clone https://github.com/rliessum/c100ctl.git
+cd c100ctl/packaging/arch/c100ctl-git
+makepkg -si
+```
+
+### Install the stable package (after v1.4.0+ tag exists)
+
+Once a release tag is pushed, the stable package can be built:
+
+```bash
+git clone https://github.com/rliessum/c100ctl.git
+cd c100ctl/packaging/arch/c100ctl
+makepkg -si
+```
+
+To update after a new release, pull the latest PKGBUILD and rebuild:
+
+```bash
+cd c100ctl
+git pull
+cd packaging/arch/c100ctl
+makepkg -si
+```
+
+### After installing
+
+```bash
+systemctl --user enable --now c100ctl.service
+```
+
+Then unplug and replug the C100 8K for udev rules to take effect.
+
+```bash
+c100ctl doctor    # verify setup
+c100ctl           # launch GUI
+```
+
+### Differences from install.sh
+
+| | `install.sh` | Arch package |
+|---|--------------|--------------|
+| Binary | `~/.local/bin/c100ctl` | `/usr/bin/c100ctl` |
+| Service | `~/.config/systemd/user/c100ctl.service` | `/usr/lib/systemd/user/c100ctl.service` |
+| udev rules | manual copy | `/usr/lib/udev/rules.d/70-c100ctl.rules` |
+| Desktop entry | `~/.local/share/applications/` | `/usr/share/applications/` |
+| Icon | `~/.local/share/icons/` | `/usr/share/icons/` |
+
+Both methods share the same config at `~/.config/c100ctl/config.json`.
+
+## Creating a release (maintainer)
+
+1. Bump the version in `pyproject.toml` and `c100ctl/__init__.py`
+2. Update `packaging/arch/c100ctl/PKGBUILD` pkgver and regenerate `.SRCINFO`
+3. Commit: `git commit -am "Release vX.Y.Z"`
+4. Tag: `git tag vX.Y.Z`
+5. Push: `git push && git push --tags`
+
+The GitHub Actions workflow creates a release with the source tarball automatically.
+
 ## Tests
 
 Unit tests do not need the pad. A live hardware check is skipped automatically if it is unplugged.

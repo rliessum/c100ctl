@@ -1,0 +1,25 @@
+pkgbase = c100ctl-git
+	pkgdesc = Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings (git version)
+	pkgver = r0.0000000
+	pkgrel = 1
+	url = https://github.com/rliessum/c100ctl
+	install = c100ctl.install
+	arch = any
+	license = MIT
+	makedepends = git
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	depends = python>=3.11
+	depends = python-gobject
+	depends = gtk4
+	depends = libadwaita
+	depends = python-evdev
+	depends = hidapi
+	provides = c100ctl
+	conflicts = c100ctl
+	source = c100ctl-git::git+https://github.com/rliessum/c100ctl.git#branch=main
+	sha256sums = SKIP
+
+pkgname = c100ctl-git

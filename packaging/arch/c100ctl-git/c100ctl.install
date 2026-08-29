@@ -1,0 +1,39 @@
+post_install() {
+    echo '>>> Reloading udev rules...'
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+
+    echo ''
+    echo '>>> C100 Control installed!'
+    echo ''
+    echo '    To start the daemon:'
+    echo '      systemctl --user enable --now c100ctl.service'
+    echo ''
+    echo '    Then unplug and replug the C100 8K for udev rules to take effect.'
+    echo ''
+    echo '    Check status with:'
+    echo '      c100ctl doctor'
+    echo ''
+}
+
+post_upgrade() {
+    echo '>>> Reloading udev rules...'
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+
+    echo ''
+    echo '>>> C100 Control upgraded!'
+    echo ''
+    echo '    Restart the daemon:'
+    echo '      systemctl --user restart c100ctl.service'
+    echo ''
+}
+
+post_remove() {
+    echo ''
+    echo '>>> C100 Control removed.'
+    echo ''
+    echo '    If you had the service enabled, run:'
+    echo '      systemctl --user daemon-reload'
+    echo ''
+}
