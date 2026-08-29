@@ -9,14 +9,21 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .catalog import media_evdev
 from .session import graphical_env
 from .uinput_kb import VirtualKeyboard
 
 log = logging.getLogger("c100ctl.actions")
+
+# How often a cached graphical environment is rechecked for a dead compositor.
+ENV_RECHECK_S = 5.0
 
 
 class ActionError(RuntimeError):
@@ -29,20 +36,69 @@ class Executor:
         switch_profile: Callable[[str], None] | None = None,
         on_light: Callable[[str], None] | None = None,
     ):
-        self.env = graphical_env()
+        self._env = graphical_env()
+        self._env_at = time.monotonic()
         self._kb: VirtualKeyboard | None = None
+        self._kb_lock = threading.RLock()
+        self._closed = False
         self.switch_profile = switch_profile
         self.on_light = on_light
 
+    @property
+    def env(self) -> dict[str, str]:
+        """Environment for launched processes and for hyprctl.
+
+        Cached, but re-resolved once the compositor instance it names is
+        gone. Restarting Hyprland mints a new HYPRLAND_INSTANCE_SIGNATURE,
+        and a daemon that resolved one at boot would otherwise aim hyprctl
+        at a dead instance for the rest of the session — every window query
+        then returns nothing, which is indistinguishable from "no match".
+        """
+        now = time.monotonic()
+        if now - self._env_at >= ENV_RECHECK_S:
+            self._env_at = now
+            if not self._session_live():
+                self._env = graphical_env()
+        return self._env
+
+    def _session_live(self) -> bool:
+        sig = self._env.get("HYPRLAND_INSTANCE_SIGNATURE")
+        runtime = self._env.get("XDG_RUNTIME_DIR")
+        if not sig or not runtime:
+            return False
+        return Path(runtime, "hypr", sig).is_dir()
+
     def keyboard(self) -> VirtualKeyboard:
-        if self._kb is None:
-            self._kb = VirtualKeyboard()
-        return self._kb
+        """The virtual keyboard, created on first use.
+
+        Prefer `injector()` for anything that writes: callers that only hold
+        the returned object are not serialized against other threads.
+        """
+        with self._kb_lock:
+            if self._kb is None:
+                self._kb = VirtualKeyboard()
+            return self._kb
+
+    @contextmanager
+    def injector(self) -> Iterator[VirtualKeyboard]:
+        """Exclusive use of the virtual keyboard for one action.
+
+        Injection runs from the action worker and from a thread per held
+        macro key, so without this the device is opened twice by racing
+        lazy init, two macros interleave their keystrokes, and a shutdown
+        can close the device out from under a thread mid-write.
+        """
+        with self._kb_lock:
+            if self._closed:
+                raise ActionError("executor is shutting down")
+            yield self.keyboard()
 
     def close(self) -> None:
-        if self._kb is not None:
-            self._kb.close()
-            self._kb = None
+        with self._kb_lock:
+            self._closed = True
+            if self._kb is not None:
+                self._kb.close()
+                self._kb = None
 
     def run(self, binding: dict[str, Any]) -> None:
         if binding.get("_close"):
@@ -54,11 +110,14 @@ class Executor:
         elif kind == "command":
             self.run_command(binding.get("command", ""))
         elif kind == "combo":
-            self.keyboard().play_combo_text(binding.get("combo", ""))
+            with self.injector() as kb:
+                kb.play_combo_text(binding.get("combo", ""))
         elif kind == "macro":
-            self.keyboard().play_macro_text(binding.get("macro", ""))
+            with self.injector() as kb:
+                kb.play_macro_text(binding.get("macro", ""))
         elif kind == "text":
-            self.keyboard().type_text(binding.get("text", ""))
+            with self.injector() as kb:
+                kb.type_text(binding.get("text", ""))
         elif kind == "profile":
             name = binding.get("profile")
             if not name:
@@ -98,20 +157,22 @@ class Executor:
         key = media_evdev(name.strip().lower())
         if not key:
             raise ActionError(f"unknown media action {name!r}")
-        self.keyboard().tap_named(key)
+        with self.injector() as kb:
+            kb.tap_named(key)
 
     def mouse(self, name: str) -> None:
         name = name.strip().lower()
-        if name in {"wheelup", "scrollup"}:
-            self.keyboard().scroll(1)
-            return
-        if name in {"wheeldown", "scrolldown"}:
-            self.keyboard().scroll(-1)
-            return
-        try:
-            self.keyboard().click_mouse(name)
-        except ValueError as e:
-            raise ActionError(str(e)) from e
+        with self.injector() as kb:
+            if name in {"wheelup", "scrollup"}:
+                kb.scroll(1)
+                return
+            if name in {"wheeldown", "scrolldown"}:
+                kb.scroll(-1)
+                return
+            try:
+                kb.click_mouse(name)
+            except ValueError as e:
+                raise ActionError(str(e)) from e
 
     def launch_app(self, binding: dict[str, Any]) -> None:
         desktop_id = (binding.get("desktop_id") or "").strip()
@@ -317,10 +378,6 @@ def _desktop_info(desktop_id: str) -> tuple[Path | None, str | None, bool]:
         exec_line = exec_line.replace("%c", path.stem).replace("%i", "").strip()
         return path, exec_line, terminal
     return None, None, False
-
-
-def _desktop_exec(desktop_id: str) -> str | None:
-    return _desktop_info(desktop_id)[1]
 
 
 _SKIP_TOKENS = {
