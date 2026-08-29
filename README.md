@@ -274,7 +274,15 @@ cd c100ctl/packaging/arch/c100ctl-git
 makepkg -si
 ```
 
-### Update the -git package (after new commits on GitHub)
+### Update (pull, build, pacman -U)
+
+```bash
+bash packaging/arch/update.sh
+```
+
+That fast-forwards `main`, builds `c100ctl-git`, and installs the archive with `pacman -U` (sudo). Use `--stable` after a version tag, or `--ask` to confirm each step.
+
+### Update the -git package by hand
 
 ```bash
 cd c100ctl
