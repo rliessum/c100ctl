@@ -213,7 +213,11 @@ def cmd_profile(args: argparse.Namespace) -> int:
         c.close()
     data = cfg.get("config") or {}
     active = data.get("active_profile")
-    for name in data.get("profiles", {}):
+    profiles = list(data.get("profiles", {}).keys())
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "active": active, "profiles": profiles}))
+        return 0
+    for name in profiles:
         mark = "*" if name == active else " "
         print(f"{mark} {name}")
     return 0
@@ -271,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("profile", help="list or switch profiles")
     pr.add_argument("--use")
     pr.add_argument("--create")
+    pr.add_argument("--json", action="store_true", help="output as JSON (for scripts)")
     return p
 
 
