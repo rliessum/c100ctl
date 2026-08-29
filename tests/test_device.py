@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from c100ctl.device import C100Device, find_c100, find_evdev_paths, hidraw_exists

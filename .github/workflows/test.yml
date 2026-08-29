@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # python-evdev builds against the kernel input headers.
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libhidapi-hidraw0
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[test]' evdev
+
+      - name: Run tests
+        run: python -m pytest -q --cov=c100ctl --cov-report=term-missing
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]' evdev
+
+      - name: Ruff
+        run: python -m ruff check c100ctl/ tests/
+
+      - name: Mypy
+        run: python -m mypy c100ctl/
