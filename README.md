@@ -55,6 +55,18 @@ That installs:
 - a desktop entry in the app launcher
 - a systemd **user** service that starts with the graphical session
 
+### install.sh flags
+
+| Command | Description |
+|---------|-------------|
+| `./install.sh` | User-local install (default) |
+| `./install.sh --arch` | Build + install Arch package from this checkout |
+| `./install.sh --arch --update` | Pull latest then build + install |
+| `./install.sh --plugin` | Symlink Omarchy plugin from this repo |
+| `./install.sh --arch --plugin` | Both Arch package and Omarchy plugin |
+
+Pass `--stable` to build from the latest tag, `--ask` to prompt before pacman. See `./install.sh --help`.
+
 You need write access to `/dev/uinput` and to Keychron `/dev/hidraw*` nodes. A udev example lives in [`packaging/70-c100ctl.rules`](packaging/70-c100ctl.rules):
 
 ```bash
