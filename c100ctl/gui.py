@@ -274,6 +274,11 @@ class C100Window(Adw.ApplicationWindow):
         new_btn.connect("clicked", lambda *_: self._action_new_profile(None, None, None))
         profile_box.append(new_btn)
 
+        save_btn = Gtk.Button(icon_name="document-save-symbolic")
+        save_btn.set_tooltip_text("Save profile (keys + lighting)")
+        save_btn.connect("clicked", lambda *_: self._action_save_profile(None, None, None))
+        profile_box.append(save_btn)
+
         self.delete_profile_btn = Gtk.Button(icon_name="user-trash-symbolic")
         self.delete_profile_btn.set_tooltip_text("Delete profile")
         self.delete_profile_btn.connect("clicked", lambda *_: self._action_delete_profile(None, None, None))
@@ -285,8 +290,8 @@ class C100Window(Adw.ApplicationWindow):
         menu = Gio.Menu()
         menu.append("Provision identity map", "win.provision")
         menu.append("New profile", "win.new-profile")
+        menu.append("Save profile", "win.save-profile")
         menu.append("Delete profile", "win.delete-profile")
-        menu.append("Save lighting to profile", "win.save-profile-light")
         menu.append("Import config…", "win.import")
         menu.append("Export config…", "win.export")
         menu.append("Clear all key colors", "win.clear-colors")
@@ -325,7 +330,7 @@ class C100Window(Adw.ApplicationWindow):
         self.install_action("win.provision", None, self._action_provision)
         self.install_action("win.new-profile", None, self._action_new_profile)
         self.install_action("win.delete-profile", None, self._action_delete_profile)
-        self.install_action("win.save-profile-light", None, self._action_save_profile_light)
+        self.install_action("win.save-profile", None, self._action_save_profile)
         self.install_action("win.import", None, self._action_import)
         self.install_action("win.export", None, self._action_export)
         self.install_action("win.clear-colors", None, self._action_clear_colors)
@@ -1207,14 +1212,9 @@ class C100Window(Adw.ApplicationWindow):
     def _on_profile_changed(self, *_a: object) -> None:
         if self._building:
             return
-        idx = int(self.profile_drop.get_selected())
-        names = list(self.config.get("profiles", {}).keys()) or ["default"]
-        if "default" in names:
-            names.remove("default")
-            names.insert(0, "default")
-        if idx < 0 or idx >= len(names):
+        name = self._get_profile_drop_value(self.profile_drop)
+        if not name:
             return
-        name = names[idx]
         self.delete_profile_btn.set_sensitive(name != "default")
         if name != self.config.get("active_profile"):
             self._rpc("set_profile", name=name)
@@ -1492,9 +1492,10 @@ class C100Window(Adw.ApplicationWindow):
         self._rpc("set_chords", chords=chords)
         self._toast(f"Chord on {len(cells)} keys")
 
-    def _action_save_profile_light(self, *_a: object) -> None:
-        self._rpc("save_profile_lighting")
-        self._toast("Lighting saved into this profile")
+    def _action_save_profile(self, *_a: object) -> None:
+        resp = self._rpc("save_profile")
+        if resp and resp.get("ok"):
+            self._toast("Profile saved (keys + lighting)")
 
     def _action_clear_colors(self, *_a: object) -> None:
         self._color_undo.append(self._snapshot_colors())
@@ -1690,7 +1691,6 @@ class C100Window(Adw.ApplicationWindow):
         for (r, c), cap in self.keys.items():
             cap.apply_binding(keys.get(key_id(r, c)))
             cap.apply_led_color(colors.get(key_id(r, c)))
-        self._building = False
         saved = set(self.selected_cells)
         primary = self.selected
         if saved:
@@ -1699,6 +1699,7 @@ class C100Window(Adw.ApplicationWindow):
             self._commit_selection({primary}, primary=primary)
         if hasattr(self, "mix_keys"):
             self._paint_mix()
+        GLib.idle_add(self._end_building)
 
     def _refresh_profile_dropdowns(self, names: list[str]) -> None:
         """Update the bind and hold profile dropdowns with current profile names."""
@@ -1710,6 +1711,11 @@ class C100Window(Adw.ApplicationWindow):
         self.hold_profile_drop.set_model(hold_model)
         self._select_profile_drop(self.profile_bind_drop, prev_bind)
         self._select_profile_drop(self.hold_profile_drop, prev_hold)
+
+    def _end_building(self) -> bool:
+        """Called from idle to clear _building after GTK settles."""
+        self._building = False
+        return False
 
     def _pump(self) -> bool:
         if not self.client:
@@ -1761,11 +1767,15 @@ class C100Window(Adw.ApplicationWindow):
             n = int(msg.get("count") or 0)
             self.test_hits[cell] = n
             self._paint_test_cell(cell, n)
-        elif ev in {"connected", "disconnected", "config", "profile", "lighting"}:
+        elif ev in {"connected", "disconnected"}:
+            self._reload()
+        elif ev in {"config", "profile", "lighting"}:
             if "config" in msg:
                 self.config = msg["config"]
                 self._apply_config()
-            self._reload()
+                self._apply_status()
+            else:
+                self._reload()
         elif ev == "error":
             self._toast(msg.get("error", "error"))
 
