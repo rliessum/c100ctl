@@ -5,14 +5,17 @@ from __future__ import annotations
 import colorsys
 import math
 import threading
-from typing import Sequence
+from collections.abc import Sequence
 
-from .hid import HidDevice, HidError, HidInfo, enumerate_devices
 from . import PID, VID
+from .hid import HidDevice, HidError, HidInfo, enumerate_devices
 
 VIA_USAGE_PAGE = 0xFF60
 VIA_USAGE = 0x61
 REPORT_LEN = 32
+
+# Firmware replies with this in byte 0 for a command it does not implement.
+UNSUPPORTED = 0xFF
 
 CMD_GET_PROTOCOL_VERSION = 0x01
 CMD_GET_KEYBOARD_VALUE = 0x02
@@ -114,7 +117,17 @@ class ViaClient:
                 raise ViaError(str(e)) from e
         if not raw:
             raise ViaError(f"timeout waiting for VIA response to {payload[:4]!r}")
-        return raw[:REPORT_LEN]
+        # The firmware echoes the command byte. A different byte means the
+        # response stream is out of step with the requests, and parsing it
+        # would silently yield another command's payload as this one's.
+        # UNSUPPORTED is the firmware's own reply for a command it lacks.
+        if raw[0] not in (data[0], UNSUPPORTED):
+            raise ViaError(
+                f"VIA response out of sync: sent {data[0]:#04x}, got {raw[0]:#04x}"
+            )
+        # Short reads would otherwise surface as IndexError from the callers
+        # that index fixed offsets into the reply.
+        return raw[:REPORT_LEN].ljust(REPORT_LEN, b"\x00")
 
     def protocol_version(self) -> int:
         r = self._cmd([CMD_GET_PROTOCOL_VERSION])

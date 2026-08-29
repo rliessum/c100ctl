@@ -60,7 +60,7 @@ class ViaClientTest(unittest.TestCase):
         via.write_all_rgb([(255, 0, 0)] * 12, save=True)
         cmds = [w[1] for w in hid.writes]
         self.assertIn(KC_RGB, cmds)
-        hid.replies = [bytes([0x07, 0, 0, 2]) + bytes(28)]
+        hid.replies = [bytes([KC_RGB, 0x07, 0, 2]) + bytes(28)]
         hid.echo = False
         self.assertEqual(via.get_per_key_type(), 2)
 
@@ -162,6 +162,8 @@ class ViaClientTest(unittest.TestCase):
         hid = FakeHid()
         via = _client_with(hid)
         pkt = bytearray(32)
+        pkt[0] = 0x02  # CMD_GET_KEYBOARD_VALUE, echoed by the firmware
+        pkt[1] = 0x03  # VALUE_SWITCH_MATRIX
         pkt[2] = 0x01
         hid.replies = [bytes(pkt)]
         hid.echo = False
@@ -192,6 +194,8 @@ class ViaClientTest(unittest.TestCase):
         hid = FakeHid()
         via = _client_with(hid)
         row = bytearray(32)
+        row[0] = KC_RGB  # echoed command byte
+        row[1] = 6  # KC_RGB_LED_NUMBER
         row[3:6] = bytes([0, 1, 2])
         hid.replies = [bytes(row)]
         hid.echo = False
@@ -200,3 +204,39 @@ class ViaClientTest(unittest.TestCase):
         hid.write = lambda pkt: (_ for _ in ()).throw(__import__("c100ctl.hid", fromlist=["HidError"]).HidError("nope"))
         with self.assertRaises(ViaError):
             via.protocol_version()
+
+
+class ViaResponseValidationTest(unittest.TestCase):
+    """The firmware echoes the command byte; a mismatch means the response
+    stream is out of step and must not be parsed as this command's reply.
+    """
+
+    def test_desynced_response_raises(self):
+        hid = FakeHid([bytes([0x11, 0x04]) + bytes(30)])
+        hid.echo = False
+        via = _client_with(hid)
+        with self.assertRaises(ViaError) as cm:
+            via.protocol_version()
+        self.assertIn("out of sync", str(cm.exception))
+
+    def test_unsupported_sentinel_is_allowed_through(self):
+        """0xFF is the firmware's own 'I don't implement this' reply."""
+        hid = FakeHid([bytes([0xFF]) + bytes(31)])
+        hid.echo = False
+        via = _client_with(hid)
+        self.assertIsNone(via.get_poll_div())
+
+    def test_short_reply_is_padded_not_indexed_off_the_end(self):
+        """A truncated read used to surface as IndexError from the caller."""
+        hid = FakeHid([bytes([0x01, 0x00])])
+        hid.echo = False
+        via = _client_with(hid)
+        self.assertEqual(via.protocol_version(), 0)
+
+    def test_short_keymap_read_does_not_raise_index_error(self):
+        hid = FakeHid([bytes([0x12, 0, 0, 0])] * 40)
+        hid.echo = False
+        via = _client_with(hid)
+        keymap = via.read_keymap(1, 2, 2)
+        self.assertEqual(len(keymap), 1)
+        self.assertEqual(keymap[0], [[0, 0], [0, 0]])
