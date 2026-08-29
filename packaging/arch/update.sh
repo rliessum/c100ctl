@@ -67,8 +67,14 @@ fi
 
 echo ">>> makepkg in $PKGDIR"
 cd "$PKGDIR"
-# -f rebuild, -C clean src/pkg, -s install deps, --rmdeps drop makedeps after
-makepkg -fC --syncdeps --rmdeps --needed ${NCON:+$NCON}
+# mise/asdf shims hide Arch python; keep /usr/bin first for makepkg.
+export PATH="/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
+export PYTHONNOUSERSITE=1
+makepkg_args=(-fC --syncdeps --rmdeps --needed)
+if [[ -n "$NCON" ]]; then
+  makepkg_args+=("$NCON")
+fi
+makepkg "${makepkg_args[@]}"
 
 shopt -s nullglob
 pkgs=($GLOB)
@@ -76,7 +82,6 @@ if [[ ${#pkgs[@]} -eq 0 ]]; then
   echo "makepkg produced no package matching $GLOB" >&2
   exit 1
 fi
-# newest archive in this directory
 pkg="$(ls -t "${pkgs[@]}" | head -n1)"
 echo ">>> pacman -U $pkg"
 sudo pacman -U ${NCON:+$NCON} --needed "$PWD/$pkg"

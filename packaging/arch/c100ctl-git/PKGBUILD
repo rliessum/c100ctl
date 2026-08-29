@@ -1,6 +1,6 @@
 # Maintainer: Richard van Liessum <richard@liessum.net>
 pkgname=c100ctl-git
-pkgver=r0.0000000
+pkgver=r18.7df0830
 pkgrel=1
 pkgdesc='Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings (git version)'
 arch=('any')
@@ -34,13 +34,13 @@ pkgver() {
 
 build() {
     cd "$pkgname"
-    python -m build --wheel --no-isolation
+    /usr/bin/python -m build --wheel --no-isolation
 }
 
 package() {
     cd "$pkgname"
 
-    python -m installer --destdir="$pkgdir" dist/*.whl
+    /usr/bin/python -m installer --destdir="$pkgdir" dist/*.whl
 
     install -Dm644 packaging/70-c100ctl.rules "$pkgdir/usr/lib/udev/rules.d/70-c100ctl.rules"
     install -Dm644 packaging/c100ctl.system.service "$pkgdir/usr/lib/systemd/user/c100ctl.service"

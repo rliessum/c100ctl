@@ -29,13 +29,13 @@ sha256sums=('SKIP')
 
 build() {
     cd "$pkgname-$pkgver"
-    python -m build --wheel --no-isolation
+    /usr/bin/python -m build --wheel --no-isolation
 }
 
 package() {
     cd "$pkgname-$pkgver"
 
-    python -m installer --destdir="$pkgdir" dist/*.whl
+    /usr/bin/python -m installer --destdir="$pkgdir" dist/*.whl
 
     install -Dm644 packaging/70-c100ctl.rules "$pkgdir/usr/lib/udev/rules.d/70-c100ctl.rules"
     install -Dm644 packaging/c100ctl.system.service "$pkgdir/usr/lib/systemd/user/c100ctl.service"
