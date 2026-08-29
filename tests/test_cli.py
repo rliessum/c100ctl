@@ -217,9 +217,9 @@ class CmdTest(unittest.TestCase):
             empty = argparse.Namespace(poll=None, debounce_type=None, debounce_ms=None, nkro=None, idle_dim=None)
             with self.assertRaises(SystemExit):
                 cmd_advanced(empty)
-            self.assertEqual(cmd_profile(argparse.Namespace(create="g", use=None, json=False)), 0)
-            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use="g", json=False)), 0)
-            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use=None, json=False)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create="g", use=None, delete=None, clone=True, json=False)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use="g", delete=None, clone=True, json=False)), 0)
+            self.assertEqual(cmd_profile(argparse.Namespace(create=None, use=None, delete=None, clone=True, json=False)), 0)
             self.assertEqual(cmd_provision(argparse.Namespace()), 0)
 
     def test_profile_json_output(self):
@@ -233,7 +233,7 @@ class CmdTest(unittest.TestCase):
         })
         with patch("c100ctl.cli._client", return_value=client):
             with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
-                ns = argparse.Namespace(create=None, use=None, json=True)
+                ns = argparse.Namespace(create=None, use=None, delete=None, clone=True, json=True)
                 result = cmd_profile(ns)
                 self.assertEqual(result, 0)
                 output = mock_stdout.getvalue().strip()
@@ -243,6 +243,36 @@ class CmdTest(unittest.TestCase):
                 self.assertIn("default", data["profiles"])
                 self.assertIn("gaming", data["profiles"])
                 self.assertIn("work", data["profiles"])
+
+    def test_profile_create_with_clone(self):
+        client = self._client({"ok": True, "config": {"active_profile": "default", "profiles": {"default": {}}}})
+        with patch("c100ctl.cli._client", return_value=client):
+            ns = argparse.Namespace(create="gaming", use=None, delete=None, clone=True, json=False)
+            self.assertEqual(cmd_profile(ns), 0)
+            call_args = client.request.call_args
+            self.assertEqual(call_args.kwargs.get("clone_from"), "__current__")
+
+    def test_profile_create_no_clone(self):
+        client = self._client({"ok": True, "config": {"active_profile": "default", "profiles": {"default": {}}}})
+        with patch("c100ctl.cli._client", return_value=client):
+            ns = argparse.Namespace(create="empty", use=None, delete=None, clone=False, json=False)
+            self.assertEqual(cmd_profile(ns), 0)
+            call_args = client.request.call_args
+            self.assertIsNone(call_args.kwargs.get("clone_from"))
+
+    def test_profile_delete(self):
+        client = self._client({"ok": True, "config": {"active_profile": "default", "profiles": {"default": {}}}})
+        with patch("c100ctl.cli._client", return_value=client):
+            ns = argparse.Namespace(create=None, use=None, delete="gaming", clone=True, json=False)
+            self.assertEqual(cmd_profile(ns), 0)
+            client.request.assert_called_with("delete_profile", name="gaming")
+
+    def test_profile_delete_failure(self):
+        client = self._client({"ok": False, "error": "cannot delete the default profile"})
+        with patch("c100ctl.cli._client", return_value=client):
+            ns = argparse.Namespace(create=None, use=None, delete="default", clone=True, json=False)
+            with self.assertRaises(SystemExit):
+                cmd_profile(ns)
 
     def test_client_requires_daemon(self):
         with patch("c100ctl.cli.daemon_available", return_value=False):

@@ -871,7 +871,11 @@ class Engine:
             self._switch_profile(req["name"])
             return {"ok": True}
         if op == "ensure_profile":
-            self.store.ensure_profile(req["name"], req.get("label"))
+            self.store.ensure_profile(
+                req["name"],
+                req.get("label"),
+                clone_from=req.get("clone_from"),
+            )
             return {"ok": True, "config": self.store.snapshot()}
         if op == "delete_profile":
             self.store.delete_profile(req["name"])

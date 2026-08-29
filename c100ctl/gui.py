@@ -264,13 +264,28 @@ class C100Window(Adw.ApplicationWindow):
         conn_box.append(self.conn_label)
         header.set_title_widget(conn_box)
 
+        profile_box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
         self.profile_drop = Gtk.DropDown.new_from_strings(["default"])
         self.profile_drop.connect("notify::selected", self._on_profile_changed)
-        header.pack_start(self.profile_drop)
+        profile_box.append(self.profile_drop)
+
+        new_btn = Gtk.Button(icon_name="list-add-symbolic")
+        new_btn.set_tooltip_text("New profile")
+        new_btn.connect("clicked", lambda *_: self._action_new_profile(None, None, None))
+        profile_box.append(new_btn)
+
+        self.delete_profile_btn = Gtk.Button(icon_name="user-trash-symbolic")
+        self.delete_profile_btn.set_tooltip_text("Delete profile")
+        self.delete_profile_btn.connect("clicked", lambda *_: self._action_delete_profile(None, None, None))
+        self.delete_profile_btn.set_sensitive(False)
+        profile_box.append(self.delete_profile_btn)
+
+        header.pack_start(profile_box)
 
         menu = Gio.Menu()
         menu.append("Provision identity map", "win.provision")
         menu.append("New profile", "win.new-profile")
+        menu.append("Delete profile", "win.delete-profile")
         menu.append("Save lighting to profile", "win.save-profile-light")
         menu.append("Import config…", "win.import")
         menu.append("Export config…", "win.export")
@@ -309,6 +324,7 @@ class C100Window(Adw.ApplicationWindow):
 
         self.install_action("win.provision", None, self._action_provision)
         self.install_action("win.new-profile", None, self._action_new_profile)
+        self.install_action("win.delete-profile", None, self._action_delete_profile)
         self.install_action("win.save-profile-light", None, self._action_save_profile_light)
         self.install_action("win.import", None, self._action_import)
         self.install_action("win.export", None, self._action_export)
@@ -503,8 +519,8 @@ class C100Window(Adw.ApplicationWindow):
         self.text_box = labeled("Text", self.text_entry)
         box.append(self.text_box)
 
-        self.profile_entry = Gtk.Entry(placeholder_text="gaming")
-        self.profile_box = labeled("Profile name", self.profile_entry)
+        self.profile_bind_drop = Gtk.DropDown.new_from_strings(["default"])
+        self.profile_box = labeled("Switch to profile", self.profile_bind_drop)
         box.append(self.profile_box)
 
         self.url_entry = Gtk.Entry(placeholder_text="https://")
@@ -532,9 +548,12 @@ class C100Window(Adw.ApplicationWindow):
         self.macro_box.append(rec_row)
 
         self.hold_drop = Gtk.DropDown.new_from_strings(list(HOLD_CHOICES))
-        self.hold_entry = Gtk.Entry(placeholder_text="hold value (profile / combo / url)")
+        self.hold_drop.connect("notify::selected", self._on_hold_type_changed)
+        self.hold_profile_drop = Gtk.DropDown.new_from_strings(["default"])
+        self.hold_entry = Gtk.Entry(placeholder_text="hold value (combo / url)")
         hold_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         hold_col.append(self.hold_drop)
+        hold_col.append(self.hold_profile_drop)
         hold_col.append(self.hold_entry)
         box.append(labeled("On hold", hold_col))
 
@@ -727,6 +746,18 @@ class C100Window(Adw.ApplicationWindow):
         self.media_box.set_visible(kind == "media")
         self.mouse_box.set_visible(kind == "mouse")
         self.light_box.set_visible(kind == "light")
+        self._sync_hold_fields()
+
+    def _on_hold_type_changed(self, *_a: object) -> None:
+        if not self._building:
+            self._sync_hold_fields()
+
+    def _sync_hold_fields(self) -> None:
+        """Show/hide hold widgets based on hold type selection."""
+        hold_idx = int(self.hold_drop.get_selected() or 0)
+        is_profile_hold = hold_idx in (1, 2)
+        self.hold_profile_drop.set_visible(is_profile_hold)
+        self.hold_entry.set_visible(hold_idx > 2)
 
     def _on_cap_pressed(self, gesture: Gtk.GestureClick, _n: int, _x: float, _y: float, cap: KeyCap) -> None:
         if self._drag_moved:
@@ -905,12 +936,13 @@ class C100Window(Adw.ApplicationWindow):
             self.combo_entry.set_text("")
             self.macro_entry.set_text("")
             self.text_entry.set_text("")
-            self.profile_entry.set_text("")
+            self.profile_bind_drop.set_selected(0)
             self.url_entry.set_text("")
             self.media_drop.set_selected(0)
             self.mouse_drop.set_selected(0)
             self.light_drop.set_selected(0)
             self.hold_drop.set_selected(0)
+            self.hold_profile_drop.set_selected(0)
             self.hold_entry.set_text("")
             self.repeat_hold.set_active(False)
             self.type_drop.set_selected(0)
@@ -925,14 +957,15 @@ class C100Window(Adw.ApplicationWindow):
         self.combo_entry.set_text(binding.get("combo", ""))
         self.macro_entry.set_text(binding.get("macro", ""))
         self.text_entry.set_text(binding.get("text", ""))
-        self.profile_entry.set_text(binding.get("profile", ""))
+        self._select_profile_drop(self.profile_bind_drop, binding.get("profile"))
         self.url_entry.set_text(binding.get("url", ""))
         self._select_catalog(self.media_drop, [i for i, _l, _k in MEDIA_KEYS], binding.get("media"))
         self._select_catalog(self.mouse_drop, [i for i, _l in MOUSE_ACTIONS], binding.get("mouse"))
         self._select_catalog(self.light_drop, [i for i, _l in LIGHT_ACTIONS], binding.get("light"))
         hold = binding.get("hold") if isinstance(binding.get("hold"), dict) else None
         self.hold_drop.set_selected(self._hold_index(hold))
-        self.hold_entry.set_text(self._hold_value(hold))
+        self._select_profile_drop(self.hold_profile_drop, self._hold_profile_value(hold))
+        self.hold_entry.set_text(self._hold_entry_value(hold))
         self.repeat_hold.set_active(str(binding.get("repeat") or "") in {"hold", "while_held"})
         desktop = binding.get("desktop_id")
         if desktop:
@@ -947,6 +980,53 @@ class C100Window(Adw.ApplicationWindow):
                 i += 1
         self._building = False
         self._sync_type_fields()
+
+    def _select_profile_drop(self, drop: Gtk.DropDown, name: str | None) -> None:
+        """Select a profile by name in the given dropdown."""
+        if not name:
+            drop.set_selected(0)
+            return
+        model = drop.get_model()
+        if not model:
+            return
+        for i in range(model.get_n_items()):
+            item = model.get_item(i)
+            if item and item.get_string() == name:
+                drop.set_selected(i)
+                return
+        drop.set_selected(0)
+
+    def _get_profile_drop_value(self, drop: Gtk.DropDown) -> str:
+        """Get the selected profile name from a dropdown."""
+        model = drop.get_model()
+        if not model:
+            return "default"
+        idx = int(drop.get_selected() or 0)
+        if idx < model.get_n_items():
+            item = model.get_item(idx)
+            if item:
+                return item.get_string()
+        return "default"
+
+    def _hold_profile_value(self, hold: dict[str, Any] | None) -> str:
+        """Get profile name from hold binding if it's a profile type."""
+        if not hold:
+            return ""
+        if hold.get("type") == "profile":
+            return hold.get("profile", "")
+        return ""
+
+    def _hold_entry_value(self, hold: dict[str, Any] | None) -> str:
+        """Get non-profile hold value for the text entry."""
+        if not hold:
+            return ""
+        kind = hold.get("type")
+        if kind == "profile":
+            return ""
+        for key in ("combo", "media", "light", "url"):
+            if hold.get(key):
+                return str(hold[key])
+        return ""
 
     def _key_colors(self) -> dict[str, str]:
         return (self.config.get("lighting") or {}).get("keys") or {}
@@ -1055,10 +1135,12 @@ class C100Window(Adw.ApplicationWindow):
         elif kind == "text":
             binding["text"] = self.text_entry.get_text()
         elif kind == "profile":
-            binding["profile"] = self.profile_entry.get_text().strip()
+            binding["profile"] = self._get_profile_drop_value(self.profile_bind_drop)
             if not binding["profile"]:
-                self._toast("Enter a profile name")
+                self._toast("Select a profile")
                 return
+            if not binding["label"]:
+                binding["label"] = binding["profile"]
         elif kind == "url":
             binding["url"] = self.url_entry.get_text().strip()
             if not binding["url"]:
@@ -1127,9 +1209,13 @@ class C100Window(Adw.ApplicationWindow):
             return
         idx = int(self.profile_drop.get_selected())
         names = list(self.config.get("profiles", {}).keys()) or ["default"]
+        if "default" in names:
+            names.remove("default")
+            names.insert(0, "default")
         if idx < 0 or idx >= len(names):
             return
         name = names[idx]
+        self.delete_profile_btn.set_sensitive(name != "default")
         if name != self.config.get("active_profile"):
             self._rpc("set_profile", name=name)
             self._reload()
@@ -1343,13 +1429,15 @@ class C100Window(Adw.ApplicationWindow):
 
     def _hold_binding(self) -> dict[str, Any] | None:
         idx = int(self.hold_drop.get_selected() or 0)
-        value = self.hold_entry.get_text().strip()
         if idx <= 0:
             return None
         if idx == 1:
-            return {"type": "profile", "profile": value, "label": value} if value else None
+            profile = self._get_profile_drop_value(self.hold_profile_drop)
+            return {"type": "profile", "profile": profile, "label": profile} if profile else None
         if idx == 2:
-            return {"type": "profile", "profile": value, "momentary": True, "label": value} if value else None
+            profile = self._get_profile_drop_value(self.hold_profile_drop)
+            return {"type": "profile", "profile": profile, "momentary": True, "label": profile} if profile else None
+        value = self.hold_entry.get_text().strip()
         if idx == 3:
             return {"type": "combo", "combo": value, "label": value} if value else None
         if idx == 4:
@@ -1368,13 +1456,6 @@ class C100Window(Adw.ApplicationWindow):
             return 2 if hold.get("momentary") else 1
         return {"combo": 3, "media": 4, "light": 5, "url": 6}.get(kind, 0)
 
-    def _hold_value(self, hold: dict[str, Any] | None) -> str:
-        if not hold:
-            return ""
-        for key in ("profile", "combo", "media", "light", "url"):
-            if hold.get(key):
-                return str(hold[key])
-        return ""
 
     def _select_catalog(self, drop: Gtk.DropDown, idents: list[str], value: Any) -> None:
         if value in idents:
@@ -1467,7 +1548,10 @@ class C100Window(Adw.ApplicationWindow):
             self._toast(resp.get("error", "provision failed"))
 
     def _action_new_profile(self, *_a: object) -> None:
-        dialog = Adw.AlertDialog(heading="New profile", body="Name this binding profile")
+        dialog = Adw.AlertDialog(
+            heading="New profile",
+            body="Create a new profile cloned from the current one.",
+        )
         entry = Gtk.Entry(placeholder_text="gaming")
         dialog.set_extra_child(entry)
         dialog.add_response("cancel", "Cancel")
@@ -1478,12 +1562,43 @@ class C100Window(Adw.ApplicationWindow):
         def done(dlg, response):
             if response != "ok":
                 return
-            name = entry.get_text().strip().replace(" ", "-")
+            name = entry.get_text().strip().replace(" ", "-").lower()
             if not name:
                 return
-            self._rpc("ensure_profile", name=name, label=name)
+            if name in self.config.get("profiles", {}):
+                self._toast(f"Profile '{name}' already exists")
+                return
+            self._rpc("ensure_profile", name=name, label=name, clone_from="__current__")
             self._rpc("set_profile", name=name)
             self._reload()
+            self._toast(f"Created profile '{name}'")
+
+        dialog.connect("response", done)
+        dialog.present(self)
+
+    def _action_delete_profile(self, *_a: object) -> None:
+        active = self.config.get("active_profile", "default")
+        if active == "default":
+            self._toast("Cannot delete the default profile")
+            return
+        dialog = Adw.AlertDialog(
+            heading="Delete profile",
+            body=f"Delete the '{active}' profile? This cannot be undone.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_default_response("cancel")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def done(dlg, response):
+            if response != "delete":
+                return
+            resp = self._rpc("delete_profile", name=active)
+            if resp and resp.get("ok"):
+                self._reload()
+                self._toast(f"Deleted profile '{active}'")
+            else:
+                self._toast(resp.get("error", "Delete failed") if resp else "Delete failed")
 
         dialog.connect("response", done)
         dialog.present(self)
@@ -1560,11 +1675,16 @@ class C100Window(Adw.ApplicationWindow):
     def _apply_config(self) -> None:
         self._building = True
         names = list(self.config.get("profiles", {}).keys()) or ["default"]
+        if "default" in names:
+            names.remove("default")
+            names.insert(0, "default")
         model = Gtk.StringList.new(names)
         self.profile_drop.set_model(model)
         active = self.config.get("active_profile", "default")
         if active in names:
             self.profile_drop.set_selected(names.index(active))
+        self._refresh_profile_dropdowns(names)
+        self.delete_profile_btn.set_sensitive(active != "default")
         keys = self._active_keys()
         colors = (self.config.get("lighting") or {}).get("keys") or {}
         for (r, c), cap in self.keys.items():
@@ -1579,6 +1699,17 @@ class C100Window(Adw.ApplicationWindow):
             self._commit_selection({primary}, primary=primary)
         if hasattr(self, "mix_keys"):
             self._paint_mix()
+
+    def _refresh_profile_dropdowns(self, names: list[str]) -> None:
+        """Update the bind and hold profile dropdowns with current profile names."""
+        bind_model = Gtk.StringList.new(names)
+        hold_model = Gtk.StringList.new(names)
+        prev_bind = self._get_profile_drop_value(self.profile_bind_drop)
+        prev_hold = self._get_profile_drop_value(self.hold_profile_drop)
+        self.profile_bind_drop.set_model(bind_model)
+        self.hold_profile_drop.set_model(hold_model)
+        self._select_profile_drop(self.profile_bind_drop, prev_bind)
+        self._select_profile_drop(self.hold_profile_drop, prev_hold)
 
     def _pump(self) -> bool:
         if not self.client:

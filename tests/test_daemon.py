@@ -64,6 +64,37 @@ class DaemonIpcTest(unittest.TestCase):
         self.eng.handle({"op": "delete_profile", "name": "gaming"})
         self.assertEqual(self.store.active_profile_name(), "default")
 
+    def test_ensure_profile_with_clone(self):
+        self.store.set_binding(1, 1, {"type": "combo", "combo": "a", "label": "a"})
+        resp = self.eng.handle({
+            "op": "ensure_profile",
+            "name": "cloned",
+            "label": "Cloned",
+            "clone_from": "__current__",
+        })
+        self.assertTrue(resp["ok"])
+        cloned = self.store.profile("cloned")
+        self.assertEqual(cloned["keys"]["1,1"]["combo"], "a")
+
+    def test_ensure_profile_without_clone(self):
+        self.store.set_binding(1, 1, {"type": "combo", "combo": "a", "label": "a"})
+        resp = self.eng.handle({
+            "op": "ensure_profile",
+            "name": "empty",
+            "label": "Empty",
+        })
+        self.assertTrue(resp["ok"])
+        empty = self.store.profile("empty")
+        self.assertEqual(empty["keys"], {})
+
+    def test_delete_profile_cannot_delete_default(self):
+        with self.assertRaises(ValueError):
+            self.store.delete_profile("default")
+
+    def test_set_profile_missing_raises(self):
+        with self.assertRaises(KeyError):
+            self.store.set_profile("nonexistent")
+
     def test_lighting_and_colors(self):
         r = self.eng.handle({"op": "set_lighting", "brightness": 50, "effect": 2, "speed": 9, "color": "ff0000"})
         self.assertTrue(r["ok"])
