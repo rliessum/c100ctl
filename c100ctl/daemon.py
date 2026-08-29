@@ -876,9 +876,16 @@ class Engine:
                 req.get("label"),
                 clone_from=req.get("clone_from"),
             )
+            self._broadcast({"event": "config", "config": self.store.snapshot()})
             return {"ok": True, "config": self.store.snapshot()}
         if op == "delete_profile":
             self.store.delete_profile(req["name"])
+            self._broadcast({"event": "config", "config": self.store.snapshot()})
+            return {"ok": True, "config": self.store.snapshot()}
+        if op == "save_profile":
+            name = req.get("name") or self.store.active_profile_name()
+            self.store.save_profile(name)
+            self._broadcast({"event": "profile", "name": name, "config": self.store.snapshot()})
             return {"ok": True, "config": self.store.snapshot()}
         if op == "set_lighting":
             lighting = self.store.data.setdefault("lighting", {})
