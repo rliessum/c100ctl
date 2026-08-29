@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from evdev import InputDevice, categorize, ecodes
+from evdev import InputDevice, ecodes
 
 from .identity import identity_evdev_map
 
@@ -106,7 +106,9 @@ class PadGrab:
             key = ecodes.KEY[event.code]
         except KeyError:
             key = f"KEY_{event.code}"
-        if isinstance(key, list):
+        # A code with several names comes back as a tuple (older evdev used a
+        # list). Checking only for list left those keys unmapped.
+        if isinstance(key, (list, tuple)):
             key = key[0]
         cell = self._evdev_to_cell.get(key)
         if pressed:

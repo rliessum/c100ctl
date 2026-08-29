@@ -102,3 +102,34 @@ class PadHandleTest(unittest.TestCase):
         self.pad.via = via
         self.pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=ecodes.KEY_Z, value=1))
         self.assertEqual(self.hits, [])
+
+
+class PadAliasedKeycodeTest(unittest.TestCase):
+    """Some evdev codes carry several names and come back as a tuple (older
+    evdev returned a list). Only unwrapping lists left those keys unmapped.
+    """
+
+    def _pad(self):
+        hits = []
+        pad = PadGrab([], on_key=lambda r, c, p: hits.append((r, c, p)))
+        return pad, hits
+
+    def test_tuple_named_code_resolves_to_its_cell(self):
+        pad, hits = self._pad()
+        pad._evdev_to_cell = {"KEY_MUTE": (5, 5)}
+        with patch.dict(ecodes.KEY, {999: ("KEY_MUTE", "KEY_MIN_INTERESTING")}, clear=False):
+            pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=999, value=1))
+        self.assertEqual(hits, [(5, 5, True)])
+
+    def test_list_named_code_still_resolves(self):
+        pad, hits = self._pad()
+        pad._evdev_to_cell = {"KEY_COFFEE": (6, 6)}
+        with patch.dict(ecodes.KEY, {998: ["KEY_COFFEE", "KEY_SCREENLOCK"]}, clear=False):
+            pad._handle(SimpleNamespace(type=ecodes.EV_KEY, code=998, value=1))
+        self.assertEqual(hits, [(6, 6, True)])
+
+    def test_real_evdev_aliases_are_tuples(self):
+        """Guards the assumption the fix rests on."""
+        aliased = [v for v in ecodes.KEY.values() if not isinstance(v, str)]
+        self.assertTrue(aliased, "expected some multi-name keycodes")
+        self.assertTrue(all(isinstance(v, (list, tuple)) for v in aliased))
