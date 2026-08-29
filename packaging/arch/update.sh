@@ -5,16 +5,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VARIANT="git"
 NCON="--noconfirm"
+DO_PULL=1
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--stable] [--ask]
+Usage: $(basename "$0") [--stable] [--ask] [--no-pull]
 
   git pull --ff-only in the repo, makepkg the Arch package, then
   sudo pacman -U the built archive.
 
-  --stable   build packaging/arch/c100ctl (tagged release)
-  --ask      do not pass --noconfirm to makepkg / pacman
+  --stable    build packaging/arch/c100ctl (tagged release)
+  --ask       do not pass --noconfirm to makepkg / pacman
+  --no-pull   build from current tree without git pull
 EOF
 }
 
@@ -22,6 +24,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --stable) VARIANT="stable"; shift ;;
     --ask) NCON=""; shift ;;
+    --no-pull) DO_PULL=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -43,14 +46,16 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "working tree is dirty; commit or stash first" >&2
-  git status -sb >&2
-  exit 1
-fi
+if (( DO_PULL )); then
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "working tree is dirty; commit or stash first" >&2
+    git status -sb >&2
+    exit 1
+  fi
 
-echo ">>> git pull --ff-only"
-git pull --ff-only
+  echo ">>> git pull --ff-only"
+  git pull --ff-only
+fi
 
 if [[ "$VARIANT" == "stable" ]]; then
   PKGDIR="$ROOT/packaging/arch/c100ctl"
