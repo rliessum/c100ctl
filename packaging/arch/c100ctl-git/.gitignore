@@ -1,0 +1,5 @@
+/src/
+/pkg/
+/*.pkg.tar.*
+/c100ctl-git
+/c100ctl-*.tar.gz
