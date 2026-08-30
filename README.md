@@ -9,7 +9,7 @@ Linux and macOS host for the **Keychron C100 8K** 10×10 macropad. Built for [Om
 ## What you can do
 
 - Bind a key to an **app**, **command**, **key combination**, **macro**, **typed text**, **URL**, **media/system key**, **mouse click/scroll**, **lighting control**, or **profile switch**
-- **Tap** launches an app; **double-tap** closes the matching Hyprland window
+- **Tap** launches an app; **double-tap** closes it (Hyprland window on Linux, matching app on macOS)
 - **Hold** (400 ms) for a second action, including a momentary profile (layer-style)
 - **Chords**: two or more keys together fire one action
 - Per-key RGB, per-key effects, 24 matrix effects, **Mix RGB** (two zones, five timeline slots)
@@ -30,7 +30,7 @@ C100 8K ── USB ──► VIA raw HID (usage page 0xFF60)
                          Linux: evdev    macOS: IOHID seize (or VIA matrix poll)
 ```
 
-The daemon **exclusively grabs** the C100 keyboard so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos, text, media, and mouse events are injected through a virtual keyboard (`uinput` on Linux, Quartz events on macOS).
+The daemon **exclusively grabs** the C100 keyboard so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos, text, media, and mouse events are injected through a virtual keyboard (`uinput` on Linux, Quartz events on macOS). How Darwin maps HID, IOHID seize, VIA matrix fallback, and TCC grants is in [docs/macos.md](docs/macos.md).
 
 On first connect, if the pad still has the factory map (every programmable key = `KC_1`), the daemon writes a unique identity keycode to each of the 96 keys. The previous map is saved under `~/.config/c100ctl/backups/`.
 
@@ -51,7 +51,7 @@ That installs `c100ctl` on your PATH (`~/.local/bin`) and a LaunchAgent that sta
 c100ctl doctor    # HID, VIA, Input Monitoring, Accessibility
 ```
 
-On macOS, **Launch app** lists `/Applications`; **Open URL** uses `open`; Super in combos is Command; double-tap close quits the matching app. The Omarchy bar plugin is Linux-only.
+On macOS, **Launch app** lists `/Applications`; **Open URL** uses `open`; Super in combos is Command; double-tap close quits the matching app. The Omarchy bar plugin is Linux-only. Implementation (HID, grab, injection, LaunchAgent, permissions): [docs/macos.md](docs/macos.md).
 
 ### Linux
 
@@ -142,7 +142,7 @@ Each programmable cell has a type, a short label, and optional **On hold**.
 
 | Type | Fires |
 |------|--------|
-| Launch app | `.desktop` id (via `uwsm app` on Omarchy). Tap launches, double-tap closes the matching Hyprland window |
+| Launch app | `.desktop` id (via `uwsm app` on Omarchy) or a macOS bundle id / `.app`. Tap launches; double-tap closes the matching Hyprland window (Linux) or quits the app (macOS) |
 | Run command | Shell command |
 | Key combination | Injected combo, e.g. `Super+Return` |
 | Macro | Step list (see below) |
@@ -157,7 +157,7 @@ Each programmable cell has a type, a short label, and optional **On hold**.
 
 **Chord**: select two or more keys, set the action, **Bind selected keys as a chord**. All those keys down together (within 50 ms) fire the chord instead of the individual bindings.
 
-**App close** matches Hyprland `class` / `StartupWMClass`, not Chrome PWA windows.
+**App close** on Linux matches Hyprland `class` / `StartupWMClass`, not Chrome PWA windows. On macOS it quits a matching foreground application (bundle id / app name), not a single window.
 
 ### Media `--media`
 
