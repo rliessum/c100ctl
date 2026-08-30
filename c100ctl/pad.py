@@ -12,14 +12,20 @@ from typing import TYPE_CHECKING, Any
 from .host import is_macos
 from .identity import identity_evdev_map
 
-try:
-    from evdev import InputDevice, ecodes
-except ImportError:  # pragma: no cover
-    InputDevice = None
-    ecodes = None
-
 if TYPE_CHECKING:
+    from evdev import InputDevice, ecodes
+
     from .via import ViaClient
+else:
+
+    def _evdev_symbols() -> tuple[Any, Any]:
+        try:
+            from evdev import InputDevice, ecodes
+        except ImportError:  # pragma: no cover
+            return None, None
+        return InputDevice, ecodes
+
+    InputDevice, ecodes = _evdev_symbols()
 
 log = logging.getLogger("c100ctl.pad")
 

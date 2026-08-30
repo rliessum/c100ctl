@@ -4,17 +4,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import PID, PRODUCT, VID
 from .hid import HidError, HidInfo, enumerate_devices
 from .host import is_macos
 from .via import find_via_interfaces
 
-try:
+if TYPE_CHECKING:
     from evdev import InputDevice, list_devices
-except ImportError:  # pragma: no cover
-    InputDevice = None
-    list_devices = None
+else:
+
+    def _evdev_symbols() -> tuple[Any, Any]:
+        try:
+            from evdev import InputDevice, list_devices
+        except ImportError:  # pragma: no cover
+            return None, None
+        return InputDevice, list_devices
+
+    InputDevice, list_devices = _evdev_symbols()
 
 
 KEYBOARD_USAGE_PAGE = 0x01
