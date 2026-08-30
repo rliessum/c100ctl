@@ -21,7 +21,7 @@ omarchy-shell shell rescanPlugins
 
 ## Usage
 
-Click the profile name in the bar to open the panel. Select a profile to switch. Press Escape to close.
+Click the profile name in the bar to open the panel. Select a profile to switch, or click "Configure pad" to open the full GTK configurator. Press Escape to close.
 
 ## Requirements
 
