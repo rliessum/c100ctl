@@ -1,12 +1,16 @@
+import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from c100ctl import actions
 from c100ctl.actions import (
+    _SKIP_TOKENS,
     ActionError,
     Executor,
     _desktop_info,
-    _SKIP_TOKENS,
     app_match_tokens,
     window_matches,
 )
@@ -209,3 +213,134 @@ class ExecutorTest(unittest.TestCase):
         if apps:
             self.assertIn("id", apps[0])
             self.assertIn("name", apps[0])
+
+
+class ExecutorConcurrencyTest(unittest.TestCase):
+    """The virtual keyboard is driven from the action worker and from a
+    thread per held macro key. Regression cover for unsynchronized access.
+    """
+
+    def test_injection_is_serialized(self):
+        """Two threads injecting at once must not interleave keystrokes."""
+        overlaps = []
+        active = []
+
+        class SlowKeyboard(RecKeyboard):
+            def play_macro_text(self, text):
+                active.append(text)
+                if len(active) > 1:
+                    overlaps.append(tuple(active))
+                time.sleep(0.02)
+                active.remove(text)
+                self.ops.append(("macro", text))
+
+        ex = Executor()
+        ex._kb = SlowKeyboard()
+        threads = [
+            threading.Thread(target=ex.run, args=({"type": "macro", "macro": f"m{i}"},))
+            for i in range(6)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(overlaps, [], f"injection overlapped: {overlaps}")
+        self.assertEqual(len(ex._kb.ops), 6)
+
+    def test_lazy_init_opens_one_device(self):
+        """Racing threads must not each construct a VirtualKeyboard."""
+        built = []
+
+        class CountingKeyboard(RecKeyboard):
+            def __init__(self):
+                super().__init__()
+                built.append(self)
+
+        ex = Executor()
+        with patch("c100ctl.actions.VirtualKeyboard", CountingKeyboard):
+            threads = [
+                threading.Thread(target=ex.run, args=({"type": "text", "text": "x"},))
+                for _ in range(8)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(len(built), 1, f"opened {len(built)} uinput devices")
+
+    def test_run_after_close_is_refused(self):
+        """Shutdown must not let a late thread write to a closed device."""
+        ex = Executor()
+        ex._kb = RecKeyboard()
+        ex.close()
+        with self.assertRaises(ActionError):
+            ex.run({"type": "text", "text": "late"})
+
+    def test_close_waits_for_in_flight_injection(self):
+        """close() must not pull the device out from under a live write."""
+        order = []
+
+        class SlowKeyboard(RecKeyboard):
+            def type_text(self, text, interval_s=0.008):
+                time.sleep(0.05)
+                order.append("wrote")
+                self.ops.append(("text", text))
+
+            def close(self):
+                order.append("closed")
+
+        ex = Executor()
+        ex._kb = SlowKeyboard()
+        worker = threading.Thread(target=ex.run, args=({"type": "text", "text": "hi"},))
+        worker.start()
+        time.sleep(0.01)
+        ex.close()
+        worker.join()
+        self.assertEqual(order, ["wrote", "closed"])
+
+
+class ExecutorEnvRefreshTest(unittest.TestCase):
+    """Restarting the compositor mints a new HYPRLAND_INSTANCE_SIGNATURE.
+    A daemon that resolved one at boot must not keep using the dead one.
+    """
+
+    def test_stale_signature_is_re_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hypr = Path(tmp) / "hypr"
+            (hypr / "old-sig").mkdir(parents=True)
+            env = {"XDG_RUNTIME_DIR": tmp, "HYPRLAND_INSTANCE_SIGNATURE": "old-sig", "PATH": "/usr/bin"}
+            with patch("c100ctl.actions.graphical_env", return_value=dict(env)):
+                ex = Executor()
+            self.assertTrue(ex._session_live())
+
+            # compositor restarts: old instance dir goes away, a new one appears
+            (hypr / "old-sig").rmdir()
+            (hypr / "new-sig").mkdir()
+            fresh = dict(env, HYPRLAND_INSTANCE_SIGNATURE="new-sig")
+
+            ex._env_at -= actions.ENV_RECHECK_S + 1
+            with patch("c100ctl.actions.graphical_env", return_value=fresh) as resolve:
+                self.assertEqual(ex.env["HYPRLAND_INSTANCE_SIGNATURE"], "new-sig")
+                resolve.assert_called_once()
+
+    def test_live_signature_is_not_re_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "hypr" / "sig").mkdir(parents=True)
+            env = {"XDG_RUNTIME_DIR": tmp, "HYPRLAND_INSTANCE_SIGNATURE": "sig", "PATH": "/usr/bin"}
+            with patch("c100ctl.actions.graphical_env", return_value=dict(env)):
+                ex = Executor()
+            ex._env_at -= actions.ENV_RECHECK_S + 1
+            with patch("c100ctl.actions.graphical_env") as resolve:
+                self.assertEqual(ex.env["HYPRLAND_INSTANCE_SIGNATURE"], "sig")
+                resolve.assert_not_called()
+
+    def test_recheck_is_rate_limited(self):
+        """The env is read on every _which(); it must not rescan each time."""
+        env = {"XDG_RUNTIME_DIR": "/nonexistent", "PATH": "/usr/bin"}
+        with patch("c100ctl.actions.graphical_env", return_value=dict(env)):
+            ex = Executor()
+            with patch("c100ctl.actions.graphical_env", return_value=dict(env)) as resolve:
+                for _ in range(50):
+                    self.assertIn("PATH", ex.env)
+                self.assertEqual(resolve.call_count, 0)

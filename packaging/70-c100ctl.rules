@@ -1,8 +1,15 @@
-# Keychron C100 8K (and other Keychron boards) — user access to VIA/raw HID.
-# Filename must sort before 73-seat-late.rules so TAG+=uaccess is applied.
-KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3434", MODE="0660", TAG+="uaccess"
+# Keychron C100 8K — user access to VIA/raw HID.
+# Filename must sort before 73-seat-late.rules so TAG+="uaccess" is applied.
+#
+# Scoped to the C100 8K's product id. A vendor-wide rule would also hand the
+# seated user raw HID read/write on every other Keychron board attached —
+# including full keyboards, where that means reading and rewriting the keymap.
+# To control another Keychron board, add its product id in a rule of your own.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3434", ATTRS{idProduct}=="042c", MODE="0660", TAG+="uaccess"
 
 # Virtual keyboard used to inject combos / typed text.
+# This lets any process running as the seated user synthesize input into any
+# window. c100ctl needs it to replay macros; it is the broadest grant here.
 KERNEL=="uinput", MODE="0660", TAG+="uaccess"
 
 # Artery AT32 DFU (C100 8K MCU) — firmware flash via WebUSB / QMK Toolbox.

@@ -17,7 +17,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Graphene", "1.0")
 
-from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk
 
 from . import COLS, LOCKED_KEYS, LOCKED_LABELS, ROWS, __version__
 from .actions import list_desktop_apps
@@ -32,7 +32,7 @@ from .catalog import (
     media_label,
     mouse_label,
 )
-from .config import BINDING_TYPES, key_id, parse_key_id
+from .config import BINDING_TYPES, _atomic_write, executable_bindings, key_id, parse_key_id
 from .css import APP_CSS
 from .daemon import RGB_EFFECTS
 from .ipc import IpcClient, daemon_available
@@ -914,7 +914,7 @@ class C100Window(Adw.ApplicationWindow):
                 key = key.replace("<", "").replace(">", "")
                 skip = {"control_l", "control_r", "shift_l", "shift_r", "alt_l", "alt_r", "super_l", "super_r"}
                 if key.lower() not in skip:
-                    names.append(key.lower() if len(key) == 1 else key.lower())
+                    names.append(key.lower())
             if names:
                 now = time.monotonic()
                 delay = int((now - self._record_last) * 1000)
@@ -1508,7 +1508,9 @@ class C100Window(Adw.ApplicationWindow):
             return
         path = file.get_path()
         if path:
-            Path(path).write_text(json.dumps(self.config, indent=2) + "\n", encoding="utf-8")
+            # The export carries every bound command; keep it 0600 like the
+            # config it came from rather than taking the ambient umask.
+            _atomic_write(Path(path), json.dumps(self.config, indent=2) + "\n")
             self._toast("Exported")
 
     def _action_import(self, *_a: object) -> None:
@@ -1530,7 +1532,62 @@ class C100Window(Adw.ApplicationWindow):
         if not isinstance(data, dict):
             self._toast("Not a config object")
             return
-        self._rpc("import_config", config=data)
+        runnable = executable_bindings(data)
+        if not runnable:
+            self._apply_import(data)
+            return
+        self._confirm_import(data, runnable)
+
+    def _confirm_import(self, data: dict[str, Any], runnable: list[tuple[str, str, str]]) -> None:
+        """Show what an imported config would run before trusting it.
+
+        A config file can bind arbitrary shell commands to keys, and those
+        run on the next keypress. Anything the importer did not write itself
+        gets listed here first.
+        """
+        count = len(runnable)
+        dialog = Adw.AlertDialog(
+            heading="Import this config?",
+            body=(
+                f"It binds {count} key{'' if count == 1 else 's'} to commands, apps, or URLs "
+                f"that will run when the key is pressed. Review them before importing."
+            ),
+        )
+
+        rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        rows.add_css_class("boxed-list")
+        for where, kind, detail in runnable[:40]:
+            row = Adw.ActionRow(title=detail or kind, subtitle=f"{where} · {kind}")
+            row.set_title_lines(2)
+            row.add_css_class("property")
+            rows.append(row)
+        if count > 40:
+            rows.append(Adw.ActionRow(title=f"… and {count - 40} more"))
+
+        scroller = Gtk.ScrolledWindow(propagate_natural_height=True)
+        scroller.set_max_content_height(260)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(rows)
+        dialog.set_extra_child(scroller)
+
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("import", "Import")
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("import", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def done(_dlg: object, response: str) -> None:
+            if response == "import":
+                self._apply_import(data)
+
+        dialog.connect("response", done)
+        dialog.present(self)
+
+    def _apply_import(self, data: dict[str, Any]) -> None:
+        resp = self._rpc("import_config", config=data)
+        if resp and not resp.get("ok"):
+            self._toast(resp.get("error", "Import failed"))
+            return
         self._reload()
         self._toast("Imported")
 
@@ -1821,7 +1878,7 @@ class C100Application(Adw.Application):
         super().__init__(application_id="org.omarchy.c100ctl", flags=Gio.ApplicationFlags.FLAGS_NONE)
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.PREFER_DARK)
 
-    def do_activate(self) -> None:  # noqa: N802
+    def do_activate(self) -> None:
         win = self.props.active_window
         if not win:
             win = C100Window(self)

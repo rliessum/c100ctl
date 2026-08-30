@@ -77,6 +77,13 @@ sudo udevadm trigger
 
 Then unplug and replug the pad (or log out and back in if `uaccess` needs a new session).
 
+**What these rules grant.** The hidraw rule is scoped to the C100 8K's product id
+(`3434:042c`), so it does not touch other Keychron boards you may have plugged in. The
+`uinput` rule is the broader one: it lets any process running as the seated user
+synthesize keyboard and mouse input into any window. c100ctl needs that to replay macros
+and typed text, and the same grant is what `wtype`, `ydotool`, and similar tools rely on
+— but it is worth knowing you are enabling it.
+
 ```bash
 c100ctl doctor    # hidraw, VIA, evdev, uinput, Wayland
 ```
@@ -384,20 +391,26 @@ Unit tests do not need the pad. A live hardware check is skipped automatically i
 
 ```bash
 # from the repo root, with the same Python that has evdev/gobject
-python3 -m unittest discover -s tests -v
-
-# coverage (omit GTK UI)
 python3 -m pip install -e '.[test]'   # pytest, pytest-cov, coverage
-python3 -m coverage run -m unittest discover -s tests
-python3 -m coverage report
+python3 -m pytest                     # 228 tests, no hardware needed
+
+# with coverage (the GTK UI is excluded; the gate is 80%)
 python3 -m pytest --cov=c100ctl --cov-report=term-missing
+```
+
+Lint and type checks, matching what CI runs:
+
+```bash
+python3 -m pip install -e '.[dev]'    # ruff, mypy
+python3 -m ruff check c100ctl/ tests/
+python3 -m mypy c100ctl/
 ```
 
 Live hardware test (skips if the daemon holds the VIA interface):
 
 ```bash
 systemctl --user stop c100ctl.service
-python3 -m unittest tests.test_hardware
+python3 -m pytest tests/test_hardware.py -m hardware -v
 systemctl --user start c100ctl.service
 ```
 

@@ -37,6 +37,10 @@ test = [
     "pytest-cov>=5",
     "coverage>=7",
 ]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
 
 [project.scripts]
 c100ctl = "c100ctl.__main__:main"
@@ -48,11 +52,46 @@ omit = ["c100ctl/gui.py", "c100ctl/__main__.py", "c100ctl/__init__.py"]
 
 [tool.coverage.report]
 show_missing = true
+skip_empty = true
 fail_under = 80
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
+    "raise NotImplementedError",
 ]
 
 [tool.setuptools.packages.find]
 include = ["c100ctl*"]
+exclude = ["c100ctl.tests*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "B008",    # GTK constructors in defaults are idiomatic here
+    "SIM105",  # contextlib.suppress is not clearer for these OSError guards
+    "RUF001",  # · — × in UI strings and comments are deliberate
+    "RUF003",
+    "RUF046",  # int(round(...)) documents the intent at the HSV boundaries
+    "SIM108",  # an if/else block often reads better than a ternary here
+    "C408",    # dict(a=1) is clearer than a literal when faking kwargs
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "B017", "RUF059", "SIM117"]  # test-style nits
+"c100ctl/gui.py" = ["E402"]   # gi.require_version must precede gi.repository
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "c100ctl.gui"
+ignore_errors = true

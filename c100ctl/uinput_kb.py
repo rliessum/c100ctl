@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Iterable
+from collections.abc import Iterable, Sequence
 
 from evdev import UInput, ecodes
 
@@ -19,7 +19,7 @@ for name, value in ecodes.ecodes.items():
     if isinstance(value, int) and 0 < value <= _KEY_MAX:
         _KEY_CODES.append(value)
 
-_CAP = {
+_CAP: dict[int, Sequence[int]] = {
     ecodes.EV_KEY: sorted(set(_KEY_CODES)),
     ecodes.EV_REL: [ecodes.REL_X, ecodes.REL_Y, ecodes.REL_WHEEL, ecodes.REL_HWHEEL],
 }

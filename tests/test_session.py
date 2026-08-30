@@ -1,9 +1,7 @@
-import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from c100ctl.session import graphical_env, hyprctl_available
 

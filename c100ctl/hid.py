@@ -131,7 +131,7 @@ class HidDevice:
             return b""
         return buf.raw[:n]
 
-    def __enter__(self) -> "HidDevice":
+    def __enter__(self) -> HidDevice:
         return self
 
     def __exit__(self, *exc: object) -> None:

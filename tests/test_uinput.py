@@ -4,7 +4,7 @@ from unittest.mock import patch
 from evdev import ecodes
 
 from c100ctl.keycodes import parse_combo, parse_macro
-from c100ctl.uinput_kb import VirtualKeyboard, _CAP, _KEY_CODES
+from c100ctl.uinput_kb import _CAP, _KEY_CODES, VirtualKeyboard
 
 
 class FakeUInput:

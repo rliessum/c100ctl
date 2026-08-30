@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from typing import Any
 
 from . import LOCKED_KEYS, LOCKED_LABELS, __version__
-from .config import BINDING_TYPES, key_id
+from .config import key_id
 from .ipc import IpcClient, daemon_available
 
 

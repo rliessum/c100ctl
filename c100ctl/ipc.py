@@ -14,6 +14,11 @@ from .config import socket_path
 
 Handler = Callable[[dict[str, Any]], dict[str, Any]]
 
+# A request is a single JSON line. Anything past this without a newline is a
+# peer that will never complete one, so the buffer is dropped rather than
+# grown until the daemon is killed by the OOM reaper.
+MAX_LINE = 1 << 20
+
 
 class IpcServer:
     def __init__(self, handler: Handler, path: Path | None = None):
@@ -87,7 +92,7 @@ class IpcServer:
         while not self._stop.is_set():
             try:
                 conn, _ = self._sock.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -103,6 +108,9 @@ class IpcServer:
                 if not chunk:
                     break
                 buf += chunk
+                if len(buf) > MAX_LINE:
+                    _send(conn, {"ok": False, "error": "request too large"})
+                    break
                 while b"\n" in buf:
                     raw, buf = buf.split(b"\n", 1)
                     if not raw.strip():
@@ -163,6 +171,8 @@ class IpcClient:
                 if not chunk:
                     raise ConnectionError("daemon closed the socket")
                 self._buf += chunk
+                if len(self._buf) > MAX_LINE:
+                    raise ConnectionError("daemon sent an oversized response")
                 while b"\n" in self._buf:
                     raw, self._buf = self._buf.split(b"\n", 1)
                     msg = json.loads(raw.decode())
@@ -190,10 +200,18 @@ class IpcClient:
             if not chunk:
                 return None
             self._buf += chunk
+            if len(self._buf) > MAX_LINE:
+                self._buf = b""
+                return None
             if b"\n" not in self._buf:
                 return None
             raw, self._buf = self._buf.split(b"\n", 1)
-            return json.loads(raw.decode())
+            try:
+                return json.loads(raw.decode())
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                # Server-side already tolerates bad JSON; do the same here so
+                # a truncated line cannot propagate into the GTK main loop.
+                return None
 
 
 def daemon_available() -> bool:

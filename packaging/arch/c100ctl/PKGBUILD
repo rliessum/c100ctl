@@ -14,6 +14,11 @@ depends=(
     'python-evdev'
     'hidapi'
 )
+optdepends=(
+    'xdg-utils: open URL bindings via xdg-open'
+    'uwsm: launch apps into the compositor session'
+    'hyprland: double-tap-to-close window matching'
+)
 makedepends=(
     'python-build'
     'python-installer'
@@ -41,5 +46,6 @@ package() {
     install -Dm644 packaging/c100ctl.system.service "$pkgdir/usr/lib/systemd/user/c100ctl.service"
     install -Dm644 packaging/c100ctl.desktop "$pkgdir/usr/share/applications/c100ctl.desktop"
     install -Dm644 packaging/c100ctl.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/c100ctl.svg"
+    install -Dm644 data/c100-v3.json "$pkgdir/usr/share/c100ctl/c100-v3.json"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

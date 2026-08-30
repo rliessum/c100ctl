@@ -176,3 +176,22 @@ class FakeVia:
 
     def led_map(self, rows: int = 10, cols: int = 10) -> list[list[int]]:
         return [[r * cols + c for c in range(cols)] for r in range(rows)]
+
+
+class RecIpc:
+    """Records daemon broadcasts so tests can assert on emitted events."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def broadcast(self, payload: dict[str, Any]) -> None:
+        self.sent.append(payload)
+
+    def stop(self) -> None:
+        pass
+
+    def last(self, event: str) -> dict[str, Any] | None:
+        for payload in reversed(self.sent):
+            if payload.get("event") == event:
+                return payload
+        return None

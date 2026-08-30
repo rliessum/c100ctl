@@ -1,6 +1,6 @@
 # Maintainer: Richard van Liessum <richard@liessum.net>
 pkgname=c100ctl-git
-pkgver=r18.7df0830
+pkgver=r37.5057873
 pkgrel=1
 pkgdesc='Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings (git version)'
 arch=('any')
@@ -13,6 +13,11 @@ depends=(
     'libadwaita'
     'python-evdev'
     'hidapi'
+)
+optdepends=(
+    'xdg-utils: open URL bindings via xdg-open'
+    'uwsm: launch apps into the compositor session'
+    'hyprland: double-tap-to-close window matching'
 )
 makedepends=(
     'git'
@@ -46,5 +51,6 @@ package() {
     install -Dm644 packaging/c100ctl.system.service "$pkgdir/usr/lib/systemd/user/c100ctl.service"
     install -Dm644 packaging/c100ctl.desktop "$pkgdir/usr/share/applications/c100ctl.desktop"
     install -Dm644 packaging/c100ctl.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/c100ctl.svg"
+    install -Dm644 data/c100-v3.json "$pkgdir/usr/share/c100ctl/c100-v3.json"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/${pkgname%-git}/LICENSE"
 }
