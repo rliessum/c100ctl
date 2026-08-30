@@ -41,6 +41,7 @@ Panel {
     }
 
     function openConfigurator() {
+        root.close()
         configuratorProcess.running = true
     }
 
@@ -108,11 +109,6 @@ Panel {
             ? [root.findUwsm(), "app", "c100ctl.desktop"]
             : [root.findC100ctl()]
         running: false
-        onRunningChanged: {
-            if (!running) {
-                root.close()
-            }
-        }
     }
 
     KeyboardPanel {
@@ -202,11 +198,20 @@ Panel {
                     visible: root.profiles.length === 0
                 }
 
+                Item {
+                    width: parent.width
+                    height: Style.space(8)
+                }
+
                 Rectangle {
                     width: parent.width
                     height: 1
                     color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.2)
-                    topMargin: Style.space(8)
+                }
+
+                Item {
+                    width: parent.width
+                    height: Style.space(4)
                 }
 
                 Rectangle {
