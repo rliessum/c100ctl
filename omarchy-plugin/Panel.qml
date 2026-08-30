@@ -40,13 +40,24 @@ Panel {
         switchProcess.exec({ command: [findC100ctl(), "profile", "--use", name] })
     }
 
+    function openConfigurator() {
+        root.close()
+        configuratorProcess.running = true
+    }
+
     function findC100ctl() {
         if (whichProcess.foundPath !== "") return whichProcess.foundPath
         return "c100ctl"
     }
 
+    function findUwsm() {
+        if (whichUwsmProcess.foundPath !== "") return whichUwsmProcess.foundPath
+        return ""
+    }
+
     Component.onCompleted: {
         whichProcess.running = true
+        whichUwsmProcess.running = true
     }
 
     Process {
@@ -65,6 +76,21 @@ Panel {
     }
 
     Process {
+        id: whichUwsmProcess
+        property string foundPath: ""
+        command: ["which", "uwsm"]
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var path = this.text.trim()
+                if (path !== "") {
+                    whichUwsmProcess.foundPath = path
+                }
+            }
+        }
+    }
+
+    Process {
         id: switchProcess
         running: false
         onRunningChanged: {
@@ -75,6 +101,14 @@ Panel {
                 root.close()
             }
         }
+    }
+
+    Process {
+        id: configuratorProcess
+        command: root.findUwsm() !== ""
+            ? [root.findUwsm(), "app", "c100ctl.desktop"]
+            : [root.findC100ctl()]
+        running: false
     }
 
     KeyboardPanel {
@@ -162,6 +196,58 @@ Panel {
                     font.italic: true
                     horizontalAlignment: Text.AlignHCenter
                     visible: root.profiles.length === 0
+                }
+
+                Item {
+                    width: parent.width
+                    height: Style.space(8)
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.2)
+                }
+
+                Item {
+                    width: parent.width
+                    height: Style.space(4)
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: configRow.implicitHeight + Style.space(12)
+                    color: configArea.containsMouse
+                        ? Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.1)
+                        : "transparent"
+                    radius: Style.space(4)
+
+                    Row {
+                        id: configRow
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: Style.space(8)
+
+                        Text {
+                            text: "⚙"
+                            color: root.barForeground
+                            font.pixelSize: Style.font.body
+                        }
+
+                        Text {
+                            text: "Configure pad"
+                            color: root.barForeground
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.body
+                        }
+                    }
+
+                    MouseArea {
+                        id: configArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: root.openConfigurator()
+                    }
                 }
             }
         }
