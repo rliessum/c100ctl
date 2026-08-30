@@ -10,6 +10,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .host import is_macos
+
 log = logging.getLogger("c100ctl.config")
 
 APP_NAME = "c100ctl"
@@ -37,6 +39,8 @@ def xdg_runtime() -> Path:
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
         return Path(runtime) / APP_NAME
+    if is_macos():
+        return Path(os.environ.get("TMPDIR", "/tmp")) / f"c100ctl-{os.getuid()}"
     return Path(f"/run/user/{os.getuid()}") / APP_NAME
 
 

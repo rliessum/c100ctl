@@ -1,15 +1,25 @@
-"""Locate C100 8K hidraw and evdev nodes without touching the Q1."""
+"""Locate C100 8K VIA and input interfaces without touching the Q1."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from evdev import InputDevice, list_devices
-
 from . import PID, PRODUCT, VID
-from .hid import HidInfo
+from .hid import HidError, HidInfo, enumerate_devices
+from .host import is_macos
 from .via import find_via_interfaces
+
+try:
+    from evdev import InputDevice, list_devices
+except ImportError:  # pragma: no cover
+    InputDevice = None
+    list_devices = None
+
+
+KEYBOARD_USAGE_PAGE = 0x01
+KEYBOARD_USAGE = 0x06
+KEYPAD_USAGE = 0x07
 
 
 @dataclass
@@ -38,6 +48,8 @@ def _is_c100_evdev(dev: InputDevice) -> bool:
 
 
 def find_evdev_paths(serial: str | None = None) -> list[str]:
+    if list_devices is None or InputDevice is None:
+        return []
     paths: list[str] = []
     for path in list_devices():
         try:
@@ -67,14 +79,43 @@ def find_evdev_paths(serial: str | None = None) -> list[str]:
     return sorted(set(paths))
 
 
+def find_macos_input_paths(serial: str | None = None) -> list[str]:
+    paths: list[str] = []
+    try:
+        hid = enumerate_devices(VID, PID)
+    except HidError:
+        return []
+    for info in hid:
+        if serial and info.serial and info.serial != serial:
+            continue
+        keyboard = info.usage_page == KEYBOARD_USAGE_PAGE and info.usage in {
+            KEYBOARD_USAGE,
+            KEYPAD_USAGE,
+        }
+        if keyboard:
+            paths.append(info.path)
+    return sorted(set(paths))
+
+
+def find_input_paths(serial: str | None = None) -> list[str]:
+    if is_macos():
+        return find_macos_input_paths(serial)
+    return find_evdev_paths(serial)
+
+
 def find_c100() -> C100Device | None:
     vias = find_via_interfaces()
     if not vias:
         return None
     via = vias[0]
-    evdev = find_evdev_paths(via.serial or None)
-    return C100Device(serial=via.serial, via=via, evdev_paths=evdev)
+    return C100Device(serial=via.serial, via=via, evdev_paths=find_input_paths(via.serial or None))
 
 
 def hidraw_exists(path: str) -> bool:
-    return Path(path).exists()
+    if Path(path).exists():
+        return True
+    # macOS hidapi paths are IOService IDs, not filesystem nodes.
+    try:
+        return any(d.path == path for d in enumerate_devices(VID, PID))
+    except HidError:
+        return False

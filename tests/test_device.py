@@ -2,7 +2,13 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from c100ctl.device import C100Device, find_c100, find_evdev_paths, hidraw_exists
+from c100ctl.device import (
+    C100Device,
+    find_c100,
+    find_evdev_paths,
+    find_macos_input_paths,
+    hidraw_exists,
+)
 from c100ctl.hid import HidInfo
 
 
@@ -19,7 +25,7 @@ class DeviceTest(unittest.TestCase):
     def test_find_c100_with_via(self):
         info = HidInfo("/dev/hidraw9", 0x3434, 0x042C, "ser", "C100", 0xFF60, 0x61, 0)
         with patch("c100ctl.device.find_via_interfaces", return_value=[info]):
-            with patch("c100ctl.device.find_evdev_paths", return_value=["/dev/input/event1"]):
+            with patch("c100ctl.device.find_input_paths", return_value=["/dev/input/event1"]):
                 found = find_c100()
         self.assertIsInstance(found, C100Device)
         self.assertEqual(found.via_path, "/dev/hidraw9")
@@ -49,3 +55,14 @@ class DeviceTest(unittest.TestCase):
             with patch("c100ctl.device.InputDevice", side_effect=open_dev):
                 found = find_evdev_paths()
         self.assertEqual(found, ["/dev/input/event1"])
+
+    def test_macos_input_paths_filters_keyboard(self):
+        hid = [
+            HidInfo("k0", 0x3434, 0x042C, "ser", "C100", 0x01, 0x06, 0),
+            HidInfo("via", 0x3434, 0x042C, "ser", "C100", 0xFF60, 0x61, 1),
+            HidInfo("mouse", 0x3434, 0x042C, "ser", "C100", 0x01, 0x02, 2),
+            HidInfo("nkro", 0x3434, 0x042C, "other", "C100", 0x01, 0x06, 2),
+        ]
+        with patch("c100ctl.device.enumerate_devices", return_value=hid):
+            self.assertEqual(find_macos_input_paths("ser"), ["k0"])
+            self.assertEqual(find_macos_input_paths(), ["k0", "nkro"])

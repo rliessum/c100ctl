@@ -232,7 +232,7 @@ def cmd_profile(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="c100ctl",
-        description="Control a Keychron C100 8K macropad on Linux.",
+        description="Control a Keychron C100 8K macropad on Linux or macOS.",
     )
     p.add_argument("--version", action="version", version=f"c100ctl {__version__}")
     sub = p.add_subparsers(dest="cmd")
@@ -240,7 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("gui", help="open the control window (default)")
     sub.add_parser("daemon", help="run the background daemon")
     sub.add_parser("status", help="show connection status")
-    sub.add_parser("doctor", help="check hidraw, VIA, evdev, uinput")
+    sub.add_parser("doctor", help="check HID, VIA, input grab, and injection")
     sub.add_parser("list", help="list bindings in the active profile")
     sub.add_parser("provision", help="write unique identity keycodes to the pad")
 

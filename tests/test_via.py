@@ -219,6 +219,12 @@ class ViaResponseValidationTest(unittest.TestCase):
             via.protocol_version()
         self.assertIn("out of sync", str(cm.exception))
 
+    def test_leading_report_id_is_stripped(self):
+        hid = FakeHid([bytes([0x00, 0x01, 0x00, 0x0C]) + bytes(29)])
+        hid.echo = False
+        via = _client_with(hid)
+        self.assertEqual(via.protocol_version(), 12)
+
     def test_unsupported_sentinel_is_allowed_through(self):
         """0xFF is the firmware's own 'I don't implement this' reply."""
         hid = FakeHid([bytes([0xFF]) + bytes(31)])

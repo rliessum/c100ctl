@@ -2,6 +2,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("evdev")
+
 from evdev import ecodes
 
 from c100ctl.pad import PadGrab

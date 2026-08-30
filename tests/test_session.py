@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import time
 import unittest
@@ -9,10 +10,14 @@ from c100ctl.session import graphical_env, hyprctl_available
 class SessionTest(unittest.TestCase):
     def test_fills_defaults(self):
         env = graphical_env({"HOME": "/tmp", "PATH": "/bin", "XDG_RUNTIME_DIR": "/tmp"})
-        self.assertEqual(env["XDG_CURRENT_DESKTOP"], "Hyprland")
-        self.assertEqual(env["DISPLAY"], ":0")
         self.assertIn("/usr/bin", env["PATH"])
         self.assertTrue(any(p.endswith(".local/bin") for p in env["PATH"].split(":")))
+        if sys.platform == "darwin":
+            self.assertNotEqual(env.get("XDG_CURRENT_DESKTOP"), "Hyprland")
+            self.assertIn("/opt/homebrew/bin", env["PATH"])
+        else:
+            self.assertEqual(env["XDG_CURRENT_DESKTOP"], "Hyprland")
+            self.assertEqual(env["DISPLAY"], ":0")
 
     def test_wayland_and_hypr_from_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:

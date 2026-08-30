@@ -26,7 +26,7 @@ from .config import (
 from .device import find_c100, hidraw_exists
 from .identity import layer_with_identity, looks_factory
 from .ipc import IpcServer
-from .pad import PadGrab
+from .pad import open_pad
 from .via import (
     MIX_RGB_EFFECT,
     PER_KEY_EFFECT,
@@ -80,7 +80,7 @@ class Engine:
     def __init__(self, store: Store | None = None):
         self.store = store or Store()
         self.via: ViaClient | None = None
-        self.pad: PadGrab | None = None
+        self.pad: Any = None
         self.executor = Executor(switch_profile=self._switch_profile, on_light=self._light_action)
         self.connected = False
         self.serial = ""
@@ -222,11 +222,9 @@ class Engine:
             self.hardware = {}
         self._arm_idle()
         try:
-            pad = PadGrab(found.evdev_paths, via=via, on_key=self._on_key)
-            pad.start()
-            self.pad = pad
+            self.pad = open_pad(found.evdev_paths, via=via, on_key=self._on_key)
         except Exception:
-            log.exception("evdev grab failed")
+            log.exception("pad grab failed")
             via.close()
             self.via = None
             return

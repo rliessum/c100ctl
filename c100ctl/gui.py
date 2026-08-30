@@ -35,6 +35,7 @@ from .catalog import (
 from .config import BINDING_TYPES, _atomic_write, executable_bindings, key_id, parse_key_id
 from .css import APP_CSS
 from .daemon import RGB_EFFECTS
+from .host import is_macos
 from .ipc import IpcClient, daemon_available
 from .via import MIX_RGB_EFFECT, PER_KEY_EFFECT, heatmap_hex, parse_hex_color, rgb_to_hex
 
@@ -495,11 +496,15 @@ class C100Window(Adw.ApplicationWindow):
         self.app_box.append(scroll)
         box.append(self.app_box)
 
-        self.command_entry = Gtk.Entry(placeholder_text="hyprctl dispatch exec kitty")
+        self.command_entry = Gtk.Entry(
+            placeholder_text="open -a Kitty" if is_macos() else "hyprctl dispatch exec kitty"
+        )
         self.command_box = labeled("Command", self.command_entry)
         box.append(self.command_box)
 
-        self.combo_entry = Gtk.Entry(placeholder_text="Super+Return")
+        self.combo_entry = Gtk.Entry(
+            placeholder_text="Cmd+Return" if is_macos() else "Super+Return"
+        )
         capture = Gtk.Button(label="Capture")
         capture.connect("clicked", self._capture_combo)
         combo_row = Gtk.Box(spacing=6)
@@ -1121,7 +1126,8 @@ class C100Window(Adw.ApplicationWindow):
         elif kind == "combo":
             binding["combo"] = self.combo_entry.get_text().strip()
             if not binding["combo"]:
-                self._toast("Enter a combination like Super+Return")
+                example = "Cmd+Return" if is_macos() else "Super+Return"
+                self._toast(f"Enter a combination like {example}")
                 return
         elif kind == "macro":
             binding["macro"] = self.macro_entry.get_text().strip()

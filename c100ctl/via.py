@@ -89,6 +89,17 @@ class ViaError(RuntimeError):
     pass
 
 
+def _strip_report_id(raw: bytes, command: int) -> bytes:
+    """Drop a leading report-id byte when hidapi includes one (common on macOS)."""
+    if not raw:
+        return raw
+    if raw[0] in (command, UNSUPPORTED):
+        return raw
+    if len(raw) > 1 and raw[0] == 0 and raw[1] in (command, UNSUPPORTED):
+        return raw[1:]
+    return raw
+
+
 def find_via_interfaces(vid: int = VID, pid: int = PID) -> list[HidInfo]:
     return [
         info
@@ -112,11 +123,13 @@ class ViaClient:
         with self._lock:
             try:
                 self._dev.write(pkt)
-                raw = self._dev.read(REPORT_LEN, timeout_ms)
+                # Request one extra byte: some hidapi backends prefix a report id.
+                raw = self._dev.read(REPORT_LEN + 1, timeout_ms)
             except HidError as e:
                 raise ViaError(str(e)) from e
         if not raw:
             raise ViaError(f"timeout waiting for VIA response to {payload[:4]!r}")
+        raw = _strip_report_id(raw, data[0])
         # The firmware echoes the command byte. A different byte means the
         # response stream is out of step with the requests, and parsing it
         # would silently yield another command's payload as this one's.

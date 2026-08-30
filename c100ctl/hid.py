@@ -1,10 +1,15 @@
-"""Minimal hidapi-hidraw wrapper. Keeps one C100 VIA interface open."""
+"""Minimal hidapi wrapper. Keeps one C100 VIA interface open.
+
+Linux uses libhidapi-hidraw; macOS uses the IOKit hidapi dylib.
+"""
 
 from __future__ import annotations
 
 import ctypes
 import ctypes.util
 from dataclasses import dataclass
+
+from .host import is_macos
 
 
 class HidError(RuntimeError):
@@ -30,8 +35,44 @@ _DeviceInfo._fields_ = [
 ]
 
 
-def _load() -> ctypes.CDLL:
-    lib = ctypes.CDLL("libhidapi-hidraw.so.0")
+def hidapi_candidates() -> list[str]:
+    """Library names to try, first match wins."""
+    names: list[str] = []
+    if is_macos():
+        found = ctypes.util.find_library("hidapi")
+        if found:
+            names.append(found)
+        names.extend(
+            [
+                "libhidapi.dylib",
+                "libhidapi.0.dylib",
+                "/opt/homebrew/lib/libhidapi.dylib",
+                "/usr/local/lib/libhidapi.dylib",
+            ]
+        )
+    else:
+        for key in ("hidapi-hidraw", "hidapi-libusb", "hidapi"):
+            found = ctypes.util.find_library(key)
+            if found:
+                names.append(found)
+        names.extend(
+            [
+                "libhidapi-hidraw.so.0",
+                "libhidapi-hidraw.so",
+                "libhidapi-libusb.so.0",
+                "libhidapi.so.0",
+            ]
+        )
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _bind(lib: ctypes.CDLL) -> None:
     lib.hid_init.restype = ctypes.c_int
     lib.hid_exit.restype = ctypes.c_int
     lib.hid_enumerate.argtypes = [ctypes.c_ushort, ctypes.c_ushort]
@@ -51,12 +92,34 @@ def _load() -> ctypes.CDLL:
     lib.hid_read_timeout.restype = ctypes.c_int
     lib.hid_error.argtypes = [ctypes.c_void_p]
     lib.hid_error.restype = ctypes.c_wchar_p
-    if lib.hid_init() != 0:
-        raise HidError("hid_init failed")
-    return lib
 
 
-_LIB = _load()
+def _load() -> ctypes.CDLL:
+    tried: list[str] = []
+    last: OSError | None = None
+    for name in hidapi_candidates():
+        tried.append(name)
+        try:
+            lib = ctypes.CDLL(name)
+        except OSError as e:
+            last = e
+            continue
+        _bind(lib)
+        if lib.hid_init() != 0:
+            raise HidError("hid_init failed")
+        return lib
+    detail = f": {last}" if last else ""
+    raise HidError("hidapi not found (tried " + ", ".join(tried) + ")" + detail)
+
+
+_LIB: ctypes.CDLL | None = None
+
+
+def _lib() -> ctypes.CDLL:
+    global _LIB
+    if _LIB is None:
+        _LIB = _load()
+    return _LIB
 
 
 @dataclass(frozen=True)
@@ -72,7 +135,8 @@ class HidInfo:
 
 
 def enumerate_devices(vid: int = 0, pid: int = 0) -> list[HidInfo]:
-    ptr = _LIB.hid_enumerate(vid, pid)
+    lib = _lib()
+    ptr = lib.hid_enumerate(vid, pid)
     out: list[HidInfo] = []
     cur = ptr
     seen: set[tuple[str, int, int]] = set()
@@ -96,37 +160,38 @@ def enumerate_devices(vid: int = 0, pid: int = 0) -> list[HidInfo]:
             )
         cur = d.next
     if ptr:
-        _LIB.hid_free_enumeration(ptr)
+        lib.hid_free_enumeration(ptr)
     return out
 
 
 class HidDevice:
     def __init__(self, path: str):
         self.path = path
-        self._h = _LIB.hid_open_path(path.encode())
+        lib = _lib()
+        self._h = lib.hid_open_path(path.encode())
         if not self._h:
-            raise HidError(f"open {path}: {_LIB.hid_error(None)}")
+            raise HidError(f"open {path}: {lib.hid_error(None)}")
 
     def close(self) -> None:
         if self._h:
-            _LIB.hid_close(self._h)
+            _lib().hid_close(self._h)
             self._h = None
 
     def write(self, data: bytes) -> int:
         if not self._h:
             raise HidError("device closed")
-        n = _LIB.hid_write(self._h, data, len(data))
+        n = _lib().hid_write(self._h, data, len(data))
         if n < 0:
-            raise HidError(f"write: {_LIB.hid_error(self._h)}")
+            raise HidError(f"write: {_lib().hid_error(self._h)}")
         return n
 
     def read(self, size: int = 32, timeout_ms: int = 400) -> bytes:
         if not self._h:
             raise HidError("device closed")
         buf = ctypes.create_string_buffer(size + 1)
-        n = _LIB.hid_read_timeout(self._h, buf, size, timeout_ms)
+        n = _lib().hid_read_timeout(self._h, buf, size, timeout_ms)
         if n < 0:
-            raise HidError(f"read: {_LIB.hid_error(self._h)}")
+            raise HidError(f"read: {_lib().hid_error(self._h)}")
         if n == 0:
             return b""
         return buf.raw[:n]

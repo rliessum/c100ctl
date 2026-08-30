@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import media_evdev
+from .host import is_macos
+from .inject import VirtualKeyboard
 from .session import graphical_env
-from .uinput_kb import VirtualKeyboard
 
 log = logging.getLogger("c100ctl.actions")
 
@@ -62,6 +63,8 @@ class Executor:
         return self._env
 
     def _session_live(self) -> bool:
+        if is_macos():
+            return True
         sig = self._env.get("HYPRLAND_INSTANCE_SIGNATURE")
         runtime = self._env.get("XDG_RUNTIME_DIR")
         if not sig or not runtime:
@@ -147,10 +150,12 @@ class Executor:
             raise ActionError("empty url")
         if "://" not in url:
             url = "https://" + url
-        opener = self._which("xdg-open")
+        opener = self._which("open") if is_macos() else None
         if not opener:
-            raise ActionError("xdg-open is not available")
-        if not self._uwsm_launch(opener, extra=[opener, url]):
+            opener = self._which("xdg-open")
+        if not opener:
+            raise ActionError("open/xdg-open is not available")
+        if is_macos() or not self._uwsm_launch(opener, extra=[opener, url]):
             self._spawn([opener, url])
 
     def media(self, name: str) -> None:
@@ -175,6 +180,8 @@ class Executor:
                 raise ActionError(str(e)) from e
 
     def launch_app(self, binding: dict[str, Any]) -> None:
+        if is_macos() and self._macos_launch(binding):
+            return
         desktop_id = (binding.get("desktop_id") or "").strip()
         command = (binding.get("command") or "").strip()
         if desktop_id:
@@ -261,6 +268,12 @@ class Executor:
     def _launch_tui(self, command: str) -> None:
         if self._uwsm_launch(command, terminal=True, extra=["bash", "-lc", command]):
             return
+        if is_macos():
+            escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+            self._spawn(
+                ["osascript", "-e", f'tell application "Terminal" to do script "{escaped}"']
+            )
+            return
         term = self._which("xdg-terminal-exec") or self._which("kitty") or self._which("alacritty")
         if not term:
             raise ActionError(f"no terminal to launch {command!r}")
@@ -270,6 +283,9 @@ class Executor:
             self._spawn([term, "-e", "bash", "-lc", command])
 
     def close_app(self, binding: dict[str, Any]) -> None:
+        if is_macos():
+            self._macos_close(binding)
+            return
         tokens, terminal = app_match_tokens(binding)
         if not tokens:
             raise ActionError("cannot close: no app identity")
@@ -331,6 +347,73 @@ class Executor:
             return True
         log.warning("hyprctl close %s: %s", address, out.strip())
         return False
+
+    def _macos_launch(self, binding: dict[str, Any]) -> bool:
+        desktop_id = (binding.get("desktop_id") or "").strip()
+        command = (binding.get("command") or "").strip()
+        if desktop_id:
+            ident = desktop_id.removesuffix(".desktop")
+            if ident.endswith(".app") or "/" in ident:
+                self._spawn(["open", "-a", ident])
+            elif "." in ident:
+                self._spawn(["open", "-b", ident])
+            else:
+                self._spawn(["open", "-a", ident])
+            return True
+        if command:
+            if self._omarchy_terminal_alias(command):
+                return True
+            self.run_command(command)
+            return True
+        return False
+
+    def _macos_close(self, binding: dict[str, Any]) -> None:
+        tokens, _terminal = app_match_tokens(binding)
+        names = {t.lower() for t in tokens}
+        desktop_id = (binding.get("desktop_id") or "").strip()
+        if desktop_id:
+            ident = desktop_id.removesuffix(".desktop")
+            names.add(ident.lower())
+            if ident.endswith(".app"):
+                names.add(Path(ident).stem.lower())
+            if "." in ident:
+                names.add(ident.rsplit(".", 1)[-1].lower())
+        names = {n for n in names if n and n not in _SKIP_TOKENS}
+        if not names:
+            raise ActionError("cannot close: no app identity")
+        try:
+            raw = subprocess.check_output(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to get name of every process whose background only is false',
+                ],
+                env=self.env,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            log.warning("osascript processes: %s", e)
+            return
+        closed = 0
+        for proc in (p.strip() for p in raw.split(",")):
+            if not proc or not _macos_name_matches(proc, names):
+                continue
+            escaped = proc.replace("\\", "\\\\").replace('"', '\\"')
+            try:
+                r = subprocess.run(
+                    ["osascript", "-e", f'tell application "{escaped}" to quit'],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+            except (OSError, subprocess.TimeoutExpired) as e:
+                log.warning("quit %s: %s", proc, e)
+                continue
+            if r.returncode == 0:
+                closed += 1
+        log.info("closed %s app(s) for %s", closed, sorted(names))
 
     def _omarchy_terminal_alias(self, command: str) -> bool:
         token = command.strip().split()[0] if command.strip() else ""
@@ -403,26 +486,50 @@ def app_match_tokens(binding: dict[str, Any]) -> tuple[set[str], bool]:
     desktop_id = (binding.get("desktop_id") or "").strip()
     command = (binding.get("command") or "").strip()
     if desktop_id:
-        ident = desktop_id if desktop_id.endswith(".desktop") else f"{desktop_id}.desktop"
-        tokens.add(Path(ident).stem.lower())
-        path, exec_line, terminal = _desktop_info(ident)
-        if path and path.is_file():
-            try:
-                for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                    if line.startswith("StartupWMClass="):
-                        tokens.add(line.split("=", 1)[1].strip().lower())
-            except OSError:
-                pass
-        if exec_line:
-            exe = exec_line.split()[0]
-            tokens.add(Path(exe).name.lower())
-            tokens.add(Path(exe).stem.lower())
+        raw = desktop_id.strip()
+        treat_as_desktop = raw.endswith(".desktop") or (
+            not is_macos() and not raw.endswith(".app") and "." not in raw
+        )
+        if treat_as_desktop:
+            ident = raw if raw.endswith(".desktop") else f"{raw}.desktop"
+            tokens.add(Path(ident).stem.lower())
+            path, exec_line, terminal = _desktop_info(ident)
+            if path and path.is_file():
+                try:
+                    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                        if line.startswith("StartupWMClass="):
+                            tokens.add(line.split("=", 1)[1].strip().lower())
+                except OSError:
+                    pass
+            if exec_line:
+                exe = exec_line.split()[0]
+                tokens.add(Path(exe).name.lower())
+                tokens.add(Path(exe).stem.lower())
+        else:
+            tokens.add(raw.lower())
+            if raw.endswith(".app"):
+                tokens.add(Path(raw).stem.lower())
+            elif "." in raw:
+                tokens.add(raw.rsplit(".", 1)[-1].lower())
     if command:
         exe = command.split()[0]
         tokens.add(Path(exe).name.lower())
         tokens.add(Path(exe).stem.lower())
     tokens = {t for t in tokens if t and t not in _SKIP_TOKENS}
     return tokens, terminal
+
+
+def _macos_name_matches(proc_name: str, tokens: set[str]) -> bool:
+    n = proc_name.lower().strip()
+    compact = n.replace(" ", "")
+    for t in tokens:
+        if len(t) < 2:
+            continue
+        if n == t or compact == t.replace(" ", ""):
+            return True
+        if n.endswith(t) or (len(n) >= 3 and t.endswith(n)):
+            return True
+    return False
 
 
 def window_matches(client: dict[str, Any], tokens: set[str], terminal: bool = False) -> bool:
@@ -448,6 +555,10 @@ def _word_in(text: str, token: str) -> bool:
 
 
 def list_desktop_apps() -> list[dict[str, str]]:
+    if is_macos():
+        apps = _scan_macos_apps()
+        if apps:
+            return apps
     try:
         import gi
 
@@ -513,6 +624,55 @@ def _scan_desktop_files() -> list[dict[str, str]]:
                     "name": data.get("Name", path.stem),
                     "command": data.get("Exec", ""),
                     "icon": data.get("Icon", ""),
+                }
+            )
+    apps.sort(key=lambda a: a["name"].lower())
+    return apps
+
+
+def _macos_app_roots() -> list[Path]:
+    return [
+        Path("/Applications"),
+        Path("/System/Applications"),
+        Path("/System/Cryptexes/App/System/Applications"),
+        Path.home() / "Applications",
+    ]
+
+
+def _scan_macos_apps() -> list[dict[str, str]]:
+    import plistlib
+
+    roots = _macos_app_roots()
+    apps: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        candidates = [*root.glob("*.app"), *root.glob("*/*.app")]
+        for path in candidates:
+            ident = path.name
+            name = path.stem
+            info_path = path / "Contents" / "Info.plist"
+            try:
+                with info_path.open("rb") as fh:
+                    info = plistlib.load(fh)
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                info = {}
+            if info.get("LSUIElement") in (True, 1, "1"):
+                continue
+            if info.get("LSBackgroundOnly") in (True, 1, "1"):
+                continue
+            bundle = str(info.get("CFBundleIdentifier") or ident)
+            name = str(info.get("CFBundleDisplayName") or info.get("CFBundleName") or name)
+            if not name or bundle in seen:
+                continue
+            seen.add(bundle)
+            apps.append(
+                {
+                    "id": bundle,
+                    "name": name,
+                    "command": f"open -b {bundle}",
+                    "icon": "",
                 }
             )
     apps.sort(key=lambda a: a["name"].lower())

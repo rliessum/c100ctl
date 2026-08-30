@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .host import is_macos
+
 # QMK basic keycodes (HID keyboard page).
 QMK: dict[str, int] = {
     "KC_NO": 0x0000,
@@ -460,8 +462,8 @@ class Combo:
                     "RIGHTSHIFT": "Shift",
                     "LEFTALT": "Alt",
                     "RIGHTALT": "Alt",
-                    "LEFTMETA": "Super",
-                    "RIGHTMETA": "Super",
+                    "LEFTMETA": "Cmd" if is_macos() else "Super",
+                    "RIGHTMETA": "Cmd" if is_macos() else "Super",
                 }.get(p, p.title() if len(p) > 1 else p.upper())
             )
         return "+".join(pretty)

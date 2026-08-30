@@ -14,7 +14,7 @@ class KeycodeTest(unittest.TestCase):
         c = parse_combo("Super+Return")
         self.assertEqual(c.modifiers, ("KEY_LEFTMETA",))
         self.assertEqual(c.key, "KEY_ENTER")
-        self.assertIn("Super", c.as_text())
+        self.assertTrue("Super" in c.as_text() or "Cmd" in c.as_text())
 
     def test_combo_ctrl_shift_c(self):
         c = parse_combo("ctrl+shift+c")

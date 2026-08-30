@@ -4,21 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "c100ctl"
-version = "1.4.0"
-description = "Linux host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings"
+version = "1.5.0"
+description = "Linux and macOS host for the Keychron C100 8K macropad: bindings, per-key RGB, Mix RGB, and Advanced settings"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "Richard van Liessum", email = "richard@liessum.net" },
 ]
 requires-python = ">=3.11"
-keywords = ["keychron", "c100", "qmk", "via", "macropad", "linux", "omarchy", "hyprland"]
+keywords = ["keychron", "c100", "qmk", "via", "macropad", "linux", "macos", "omarchy", "hyprland"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: X11 Applications :: GTK",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -48,7 +49,15 @@ c100ctl = "c100ctl.__main__:main"
 [tool.coverage.run]
 branch = true
 source = ["c100ctl"]
-omit = ["c100ctl/gui.py", "c100ctl/__main__.py", "c100ctl/__init__.py"]
+omit = [
+    "c100ctl/gui.py",
+    "c100ctl/__main__.py",
+    "c100ctl/__init__.py",
+    # Linux-only modules: exercised by tests/test_pad.py and tests/test_uinput.py
+    # when python-evdev is installed (CI). They sit at 0% on macOS.
+    "c100ctl/pad.py",
+    "c100ctl/uinput_kb.py",
+]
 
 [tool.coverage.report]
 show_missing = true

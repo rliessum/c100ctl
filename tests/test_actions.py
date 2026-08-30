@@ -66,6 +66,9 @@ class MatchTest(unittest.TestCase):
 
 class ExecutorTest(unittest.TestCase):
     def setUp(self):
+        self._plat = patch("c100ctl.actions.is_macos", return_value=False)
+        self._plat.start()
+        self.addCleanup(self._plat.stop)
         self.switched: list[str] = []
         self.lights: list[str] = []
         self.ex = Executor(
@@ -304,6 +307,11 @@ class ExecutorEnvRefreshTest(unittest.TestCase):
     """Restarting the compositor mints a new HYPRLAND_INSTANCE_SIGNATURE.
     A daemon that resolved one at boot must not keep using the dead one.
     """
+
+    def setUp(self):
+        self._plat = patch("c100ctl.actions.is_macos", return_value=False)
+        self._plat.start()
+        self.addCleanup(self._plat.stop)
 
     def test_stale_signature_is_re_resolved(self):
         with tempfile.TemporaryDirectory() as tmp:

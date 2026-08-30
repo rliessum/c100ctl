@@ -1,17 +1,23 @@
-"""Recover a Wayland/Hyprland environment for a systemd user daemon."""
+"""Recover a graphical session environment for the user daemon."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
+from .host import is_macos
+
 
 def graphical_env(base: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base if base is not None else os.environ)
     uid = os.getuid()
-    runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    if is_macos():
+        runtime = env.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
+    else:
+        runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
     env.setdefault("XDG_RUNTIME_DIR", runtime)
-    env.setdefault("XDG_CURRENT_DESKTOP", "Hyprland")
+    if not is_macos():
+        env.setdefault("XDG_CURRENT_DESKTOP", "Hyprland")
 
     if not env.get("WAYLAND_DISPLAY"):
         for name in ("wayland-1", "wayland-0", "wayland-2"):
@@ -33,11 +39,13 @@ def graphical_env(base: dict[str, str] | None = None) -> dict[str, str]:
     if bus.exists():
         env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={bus}")
 
-    env.setdefault("DISPLAY", ":0")
+    if not is_macos():
+        env.setdefault("DISPLAY", ":0")
     env.setdefault("HOME", str(Path.home()))
     path = env.get("PATH", "")
     extras = [
         str(Path.home() / ".local/bin"),
+        "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",
         "/bin",

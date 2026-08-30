@@ -67,6 +67,11 @@ def identity_evdev_map() -> dict[str, tuple[int, int]]:
     return out
 
 
+def identity_hid_map() -> dict[int, tuple[int, int]]:
+    """HID keyboard usage (QMK basic code) → cell."""
+    return {code: cell for cell, code in identity_qmk_map().items()}
+
+
 def looks_factory(layer0: list[list[int]]) -> bool:
     """True if programmable keys are all KC_NO or all KC_1."""
     values = []

@@ -1,4 +1,4 @@
-"""Exclusive evdev grab of the C100. Identity map → (row, col)."""
+"""Exclusive grab of the C100. Identity map → (row, col)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,16 @@ import select
 import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from evdev import InputDevice, ecodes
-
+from .host import is_macos
 from .identity import identity_evdev_map
+
+try:
+    from evdev import InputDevice, ecodes
+except ImportError:  # pragma: no cover
+    InputDevice = None
+    ecodes = None
 
 if TYPE_CHECKING:
     from .via import ViaClient
@@ -19,6 +24,22 @@ if TYPE_CHECKING:
 log = logging.getLogger("c100ctl.pad")
 
 OnKey = Callable[[int, int, bool], None]
+
+
+def open_pad(
+    paths: list[str],
+    via: ViaClient | None = None,
+    on_key: OnKey | None = None,
+) -> Any:
+    """Grab the pad on this host (evdev on Linux, IOHID/VIA on macOS)."""
+    if is_macos():
+        from .pad_macos import PadGrab as MacPadGrab
+
+        pad: Any = MacPadGrab(paths, via=via, on_key=on_key)
+    else:
+        pad = PadGrab(paths, via=via, on_key=on_key)
+    pad.start()
+    return pad
 
 
 class PadGrab:

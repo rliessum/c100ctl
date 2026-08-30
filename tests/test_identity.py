@@ -6,6 +6,7 @@ from c100ctl.identity import (
     RGB_NEXT,
     RGB_PREV,
     identity_evdev_map,
+    identity_hid_map,
     identity_qmk_map,
     layer_with_identity,
     looks_factory,
@@ -29,6 +30,10 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(len(ev), 96)
         self.assertEqual(len(set(ev.values())), 96)
         self.assertTrue(all(name.startswith("KEY_") for name in ev))
+        hid = identity_hid_map()
+        self.assertEqual(len(hid), 96)
+        self.assertEqual(len(set(hid.values())), 96)
+        self.assertEqual(hid[qmap[(1, 1)]], (1, 1))
 
     def test_factory_detect(self):
         layer = [[FACTORY_FILL for _ in range(COLS)] for _ in range(ROWS)]

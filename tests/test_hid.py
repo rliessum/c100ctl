@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from c100ctl.hid import HidDevice, HidError
+from c100ctl.hid import HidDevice, HidError, hidapi_candidates
 
 
 class FakeLib:
@@ -51,3 +51,15 @@ class HidDeviceTest(unittest.TestCase):
             dev.read(8)
         with HidDevice("/ok") as d:
             self.assertEqual(d.path, "/ok")
+
+
+class HidapiCandidatesTest(unittest.TestCase):
+    def test_linux_names(self):
+        with patch("c100ctl.hid.is_macos", return_value=False):
+            names = hidapi_candidates()
+        self.assertTrue(any("hidraw" in n for n in names))
+
+    def test_macos_names(self):
+        with patch("c100ctl.hid.is_macos", return_value=True):
+            names = hidapi_candidates()
+        self.assertTrue(any(n.endswith(".dylib") or "hidapi" in n for n in names))

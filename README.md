@@ -1,8 +1,8 @@
 # C100 Control
 
-Linux host for the **Keychron C100 8K** 10×10 macropad. Built for [Omarchy](https://omarchy.org/) (Hyprland / Wayland); runs on any Linux desktop with GTK4.
+Linux and macOS host for the **Keychron C100 8K** 10×10 macropad. Built for [Omarchy](https://omarchy.org/) (Hyprland / Wayland); also runs on other Linux desktops with GTK4, and on macOS (Homebrew GTK).
 
-[Keychron Launcher](https://launcher.keychron.com/#/keymap) remaps firmware keys in a browser. Keychron Assistant (Windows/macOS only) can launch apps. This fills the Linux gap: a native GTK app plus a user daemon that binds each key to an action and keeps working after you close the window.
+[Keychron Launcher](https://launcher.keychron.com/#/keymap) remaps firmware keys in a browser. Keychron Assistant (Windows/macOS only) can launch apps. This fills the Linux gap and adds a native host on macOS: a GTK app plus a user daemon that binds each key to an action and keeps working after you close the window.
 
 ![C100 Control](docs/screenshot.png)
 
@@ -23,17 +23,37 @@ Firmware keymap remapping, firmware flash, and Hall-effect features stay in Keyc
 The C100 enumerates as USB `3434:042c` and speaks **VIA protocol 12** on HID usage page `0xFF60`. Four corner keys are firmware lighting controls (`RGB −` / `RGB +`) and stay that way. The other 96 keys are yours.
 
 ```
-C100 8K ── USB ──► kernel hidraw / evdev
+C100 8K ── USB ──► VIA raw HID (usage page 0xFF60)
                       │
-                      ├─ VIA raw HID     firmware RGB, Mix RGB, poll, debounce, NKRO
-                      └─ evdev grab      host bindings (apps / combos / macros / …)
+                      ├─ VIA             firmware RGB, Mix RGB, poll, debounce, NKRO
+                      └─ input grab      host bindings (apps / combos / macros / …)
+                         Linux: evdev    macOS: IOHID seize (or VIA matrix poll)
 ```
 
-The daemon **exclusively grabs** the C100 input nodes so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos, text, media, and mouse events are injected through a virtual `uinput` device.
+The daemon **exclusively grabs** the C100 keyboard so pad keys never leak into the focused window (and never collide with another Keychron, such as a Q1). Combos, text, media, and mouse events are injected through a virtual keyboard (`uinput` on Linux, Quartz events on macOS).
 
 On first connect, if the pad still has the factory map (every programmable key = `KC_1`), the daemon writes a unique identity keycode to each of the 96 keys. The previous map is saved under `~/.config/c100ctl/backups/`.
 
 ## Install
+
+### macOS
+
+```bash
+brew install python gtk4 libadwaita pygobject3 hidapi
+git clone https://github.com/rliessum/c100ctl.git
+cd c100ctl
+bash install.sh
+```
+
+That installs `c100ctl` on your PATH (`~/.local/bin`) and a LaunchAgent that starts the daemon at login. Grant **Input Monitoring** (so the daemon can seize the pad and keys do not type into the focused app) and **Accessibility** (so combos, text, and mouse clicks can be injected) to that Python in System Settings → Privacy & Security. Then unplug and replug the pad.
+
+```bash
+c100ctl doctor    # HID, VIA, Input Monitoring, Accessibility
+```
+
+On macOS, **Launch app** lists `/Applications`; **Open URL** uses `open`; Super in combos is Command; double-tap close quits the matching app. The Omarchy bar plugin is Linux-only.
+
+### Linux
 
 Omarchy already has the Python/GTK stack. On Arch-like systems:
 
@@ -85,7 +105,7 @@ and typed text, and the same grant is what `wtype`, `ydotool`, and similar tools
 — but it is worth knowing you are enabling it.
 
 ```bash
-c100ctl doctor    # hidraw, VIA, evdev, uinput, Wayland
+c100ctl doctor    # hidraw, VIA, evdev, uinput, Wayland (Linux)
 ```
 
 ## GUI
@@ -128,7 +148,7 @@ Each programmable cell has a type, a short label, and optional **On hold**.
 | Macro | Step list (see below) |
 | Type text | Types the string |
 | Switch profile | Makes another binding profile active |
-| Open URL | `xdg-open` (https assumed if missing) |
+| Open URL | `xdg-open` on Linux, `open` on macOS (https assumed if missing) |
 | Media / system | Play/pause, volume, brightness, … |
 | Mouse | Click or scroll |
 | Lighting control | Next/prev effect, brighter/dimmer, toggle, Per-key RGB, Mix RGB |
@@ -265,12 +285,14 @@ Cells are `row,col` with row 0 at the top and col 0 at the left. Corners `0,0` `
 |------|---------|
 | `~/.config/c100ctl/config.json` | bindings, lighting, Mix RGB, advanced, chords, profiles |
 | `~/.config/c100ctl/backups/` | VIA keymap snapshots from provision |
-| `$XDG_RUNTIME_DIR/c100ctl/c100ctl.sock` | GUI/CLI ↔ daemon |
+| `$XDG_RUNTIME_DIR/c100ctl/c100ctl.sock` | GUI/CLI ↔ daemon (macOS: `$TMPDIR/c100ctl-$UID/`) |
 | `$XDG_RUNTIME_DIR/c100ctl/c100ctl.lock` | single-instance lock |
 
 Config version is **2**. `lighting.keys` maps `"row,col"` to a hex color. `chords` is a list of `{keys, binding}`. A profile may include its own `lighting` object (written by **Save lighting to profile**).
 
 ## Uninstall
+
+Linux:
 
 ```bash
 systemctl --user disable --now c100ctl.service
@@ -278,6 +300,15 @@ rm -f ~/.local/bin/c100ctl
 rm -rf ~/.local/share/c100ctl
 rm -f ~/.local/share/applications/c100ctl.desktop
 rm -f ~/.config/systemd/user/c100ctl.service
+```
+
+macOS:
+
+```bash
+launchctl bootout gui/$(id -u)/net.liessum.c100ctl 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/net.liessum.c100ctl.plist
+rm -f ~/.local/bin/c100ctl
+rm -rf ~/.local/share/c100ctl
 ```
 
 ## Arch Linux / Omarchy (system package)
@@ -392,7 +423,7 @@ Unit tests do not need the pad. A live hardware check is skipped automatically i
 ```bash
 # from the repo root, with the same Python that has evdev/gobject
 python3 -m pip install -e '.[test]'   # pytest, pytest-cov, coverage
-python3 -m pytest                     # 228 tests, no hardware needed
+python3 -m pytest                     # unit tests, no hardware needed
 
 # with coverage (the GTK UI is excluded; the gate is 80%)
 python3 -m pytest --cov=c100ctl --cov-report=term-missing

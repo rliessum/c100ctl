@@ -1,6 +1,10 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
+
+pytest.importorskip("evdev")
+
 from evdev import ecodes
 
 from c100ctl.keycodes import parse_combo, parse_macro
