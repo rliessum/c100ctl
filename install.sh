@@ -108,9 +108,11 @@ install_macos() {
   local path_val="${BIN}:${brew_prefix:+$brew_prefix/bin:}/usr/local/bin:/usr/bin:/bin"
   local gi_typelib=""
   local dyld=""
+  local xdg_data=""
   if [[ -n "$brew_prefix" ]]; then
     gi_typelib="${brew_prefix}/lib/girepository-1.0"
     dyld="${brew_prefix}/lib"
+    xdg_data="${brew_prefix}/share"
   fi
 
   cat > "$BIN/c100ctl" <<EOF
@@ -119,6 +121,7 @@ export PYTHONPATH="${SHARE}\${PYTHONPATH:+:\$PYTHONPATH}"
 export PATH="${path_val}\${PATH:+:\$PATH}"
 ${gi_typelib:+export GI_TYPELIB_PATH="${gi_typelib}\${GI_TYPELIB_PATH:+:\$GI_TYPELIB_PATH}"}
 ${dyld:+export DYLD_FALLBACK_LIBRARY_PATH="${dyld}\${DYLD_FALLBACK_LIBRARY_PATH:+:\$DYLD_FALLBACK_LIBRARY_PATH}"}
+${xdg_data:+export XDG_DATA_DIRS="${xdg_data}\${XDG_DATA_DIRS:+:\$XDG_DATA_DIRS}"}
 exec "${PYTHON}" -m c100ctl "\$@"
 EOF
   chmod +x "$BIN/c100ctl"

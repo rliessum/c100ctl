@@ -639,9 +639,22 @@ def _macos_app_roots() -> list[Path]:
     ]
 
 
-def _scan_macos_apps() -> list[dict[str, str]]:
+def _load_macos_plist(path: Path) -> dict[str, Any]:
+    """Best-effort Info.plist. Trailing NULs and broken XML must not abort the GUI."""
     import plistlib
 
+    try:
+        raw = path.read_bytes().rstrip(b"\0")
+        if not raw:
+            return {}
+        data = plistlib.loads(raw)
+    except Exception as e:
+        log.debug("skip plist %s: %s", path, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _scan_macos_apps() -> list[dict[str, str]]:
     roots = _macos_app_roots()
     apps: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -652,12 +665,7 @@ def _scan_macos_apps() -> list[dict[str, str]]:
         for path in candidates:
             ident = path.name
             name = path.stem
-            info_path = path / "Contents" / "Info.plist"
-            try:
-                with info_path.open("rb") as fh:
-                    info = plistlib.load(fh)
-            except (OSError, ValueError, plistlib.InvalidFileException):
-                info = {}
+            info = _load_macos_plist(path / "Contents" / "Info.plist")
             if info.get("LSUIElement") in (True, 1, "1"):
                 continue
             if info.get("LSBackgroundOnly") in (True, 1, "1"):

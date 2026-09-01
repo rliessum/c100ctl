@@ -285,9 +285,11 @@ class PadGrab:
         mode = c_void_p.in_dll(cf, "kCFRunLoopDefaultMode")
         self._rl = cf.CFRunLoopGetCurrent()
         iokit.IOHIDManagerScheduleWithRunLoop(mgr, self._rl, mode)
-        rc = iokit.IOHIDManagerOpen(mgr, kIOHIDOptionsTypeSeizeDevice)
-        if rc != kIOReturnSuccess:
-            log.info("seize C100 keyboard failed (%s); trying shared open", rc)
+        seize_rc = iokit.IOHIDManagerOpen(mgr, kIOHIDOptionsTypeSeizeDevice)
+        seized = seize_rc == kIOReturnSuccess
+        rc = seize_rc
+        if not seized:
+            log.info("seize C100 keyboard failed (%s); trying shared open", seize_rc)
             rc = iokit.IOHIDManagerOpen(mgr, kIOHIDOptionsTypeNone)
         if rc != kIOReturnSuccess:
             log.warning("IOHIDManagerOpen failed (%s); falling back to VIA matrix", rc)
@@ -296,8 +298,10 @@ class PadGrab:
                 self._mode = "matrix"
                 self._matrix_loop()
             return
-        self._seized = True
-        log.info("C100 keyboard opened via IOHID (seize=%s)", True)
+        self._seized = seized
+        log.info("C100 keyboard opened via IOHID (seize=%s)", seized)
+        if not seized:
+            log.warning("pad keys may type into the focused app until Input Monitoring seize succeeds")
         while not self._stop.is_set():
             cf.CFRunLoopRunInMode(mode, 0.25, False)
 

@@ -226,22 +226,54 @@ class MacosActionsTest(unittest.TestCase):
         self.assertIn("safari", tokens)
         self.assertIn("com.apple.safari", tokens)
 
+    def _write_app(self, root: Path, folder: str, plist: bytes) -> None:
+        info = root / folder / "Contents"
+        info.mkdir(parents=True)
+        (info / "Info.plist").write_bytes(plist)
+
     def test_scan_macos_apps_from_plist(self):
         from c100ctl.actions import _scan_macos_apps
 
         with tempfile.TemporaryDirectory() as tmp:
-            info = Path(tmp) / "FakeApp.app" / "Contents"
-            info.mkdir(parents=True)
-            (info / "Info.plist").write_bytes(
+            self._write_app(
+                Path(tmp),
+                "FakeApp.app",
                 b"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.example.FakeApp</string>
   <key>CFBundleName</key><string>FakeApp</string>
 </dict></plist>
-"""
+""",
             )
             with patch("c100ctl.actions._macos_app_roots", return_value=[Path(tmp)]):
                 apps = _scan_macos_apps()
         self.assertEqual(apps[0]["id"], "dev.example.FakeApp")
         self.assertEqual(apps[0]["name"], "FakeApp")
+
+    def test_scan_macos_apps_skips_broken_plists(self):
+        from c100ctl.actions import _load_macos_plist, _scan_macos_apps
+
+        xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>dev.example.Good</string>
+  <key>CFBundleName</key><string>Good</string>
+</dict></plist>
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_app(root, "Good.app", xml)
+            # SteamVR-style trailing NULs used to raise ExpatError and kill the GUI.
+            self._write_app(root, "SteamVR.app", xml + b"\x00\x00")
+            self._write_app(root, "Junk.app", b"not a plist at all")
+            (root / "Empty.app" / "Contents").mkdir(parents=True)
+            with patch("c100ctl.actions._macos_app_roots", return_value=[root]):
+                apps = _scan_macos_apps()
+            ids = {a["id"] for a in apps}
+            self.assertIn("dev.example.Good", ids)
+            steam = _load_macos_plist(root / "SteamVR.app" / "Contents" / "Info.plist")
+            self.assertEqual(steam["CFBundleName"], "Good")
+            self.assertEqual(_load_macos_plist(root / "Junk.app" / "Contents" / "Info.plist"), {})
+            self.assertEqual(_load_macos_plist(root / "Empty.app" / "Contents" / "Info.plist"), {})
+            self.assertEqual(_load_macos_plist(root / "Missing.app" / "Contents" / "Info.plist"), {})

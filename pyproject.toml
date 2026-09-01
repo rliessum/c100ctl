@@ -92,7 +92,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402", "B017", "RUF059", "SIM117"]  # test-style nits
-"c100ctl/gui.py" = ["E402"]   # gi.require_version must precede gi.repository
+"c100ctl/gui.py" = ["E402", "I001"]  # Homebrew env, then gi.require_version, then gi.repository
 
 [tool.mypy]
 python_version = "3.11"

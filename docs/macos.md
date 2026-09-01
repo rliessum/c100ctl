@@ -143,12 +143,12 @@ After changing TCC, unplug and replug the pad (or restart the LaunchAgent) so th
 `install.sh` on Darwin (`uname -s` = `Darwin`):
 
 - Copies `c100ctl/`, `data/`, `README.md` to `~/.local/share/c100ctl`
-- Writes `~/.local/bin/c100ctl` with `PYTHONPATH`, Homebrew `PATH`, `GI_TYPELIB_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`
+- Writes `~/.local/bin/c100ctl` with `PYTHONPATH`, Homebrew `PATH`, `GI_TYPELIB_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`, `XDG_DATA_DIRS`
 - Writes `~/Library/LaunchAgents/net.liessum.c100ctl.plist` (`RunAtLoad`, `KeepAlive`) and `bootstrap`s it into `gui/$(id -u)`
 - Logs: `~/Library/Logs/c100ctl.log`
 - Refuses `--arch` and `--plugin` (Linux-only)
 
-The GUI is GTK4 + libadwaita via Homebrew `pygobject3`. The daemon does not import GTK.
+The GUI is GTK4 + libadwaita via Homebrew `pygobject3`. The daemon does not import GTK. Before Gtk is imported, `prepare_gtk_environment()` prepends Homebrew `share` to `XDG_DATA_DIRS` so GSettings schemas are found when a terminal (Ghostty) has already set that variable. `gtk_argv()` passes only `argv[0]` to `Gio.Application.run`, because extra tokens such as `gui` are otherwise treated as files and the process exits.
 
 ```bash
 brew install python gtk4 libadwaita pygobject3 hidapi

@@ -10,6 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .session import gtk_argv, prepare_gtk_environment
+
+prepare_gtk_environment()
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -1887,10 +1891,14 @@ class C100Application(Adw.Application):
     def do_activate(self) -> None:
         win = self.props.active_window
         if not win:
-            win = C100Window(self)
+            try:
+                win = C100Window(self)
+            except Exception:
+                log.exception("failed to create window")
+                return
         win.present()
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO)
-    return C100Application().run(sys.argv)
+    return C100Application().run(gtk_argv(sys.argv))
